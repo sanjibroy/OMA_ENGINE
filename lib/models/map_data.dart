@@ -26,7 +26,7 @@ extension TileTypeExtension on TileType {
   bool get isSolid => this == TileType.wall || this == TileType.water;
 
   Color get color => switch (this) {
-        TileType.empty => const Color(0xFF1A1A26),
+        TileType.empty => const Color(0xFF1E1E1E),
         TileType.grass => const Color(0xFF3A7D44),
         TileType.wall => const Color(0xFF52525B),
         TileType.water => const Color(0xFF1D6FA4),

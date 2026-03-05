@@ -1,3 +1,8 @@
+enum ConditionOp { and, or }
+
+enum TriggerCategory { input, player, enemy, game }
+enum ActionCategory { player, enemy, world, game, audio, effects }
+
 enum TriggerType {
   // Input
   keyUpPressed,
@@ -14,6 +19,7 @@ enum TriggerType {
   // State
   playerHealthZero,
   gameStart,
+  onTimer,
 }
 
 extension TriggerTypeExtension on TriggerType {
@@ -30,6 +36,24 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.enemyNearPlayer => 'Enemy is near Player',
         TriggerType.playerHealthZero => 'Player health reaches 0',
         TriggerType.gameStart => 'Game starts',
+        TriggerType.onTimer => 'Timer (repeating)',
+      };
+
+  TriggerCategory get category => switch (this) {
+        TriggerType.keyUpPressed ||
+        TriggerType.keyDownPressed ||
+        TriggerType.keyLeftPressed ||
+        TriggerType.keyRightPressed ||
+        TriggerType.keySpacePressed =>
+          TriggerCategory.input,
+        TriggerType.playerTouchesEnemy ||
+        TriggerType.playerTouchesCollectible ||
+        TriggerType.playerTouchesDoor ||
+        TriggerType.playerTouchesNpc ||
+        TriggerType.playerHealthZero =>
+          TriggerCategory.player,
+        TriggerType.enemyNearPlayer => TriggerCategory.enemy,
+        TriggerType.gameStart || TriggerType.onTimer => TriggerCategory.game,
       };
 
   /// True for triggers that fire every frame (need continuous polling).
@@ -43,6 +67,23 @@ extension TriggerTypeExtension on TriggerType {
           true,
         _ => false,
       };
+}
+
+class RuleCondition {
+  TriggerType trigger;
+  bool negate;
+
+  RuleCondition({required this.trigger, this.negate = false});
+
+  Map<String, dynamic> toJson() => {
+        'trigger': trigger.index,
+        'negate': negate,
+      };
+
+  factory RuleCondition.fromJson(Map<String, dynamic> json) => RuleCondition(
+        trigger: TriggerType.values[json['trigger'] as int],
+        negate: json['negate'] as bool? ?? false,
+      );
 }
 
 enum ActionType {
@@ -63,6 +104,19 @@ enum ActionType {
   playMusic,
   playSfx,
   stopMusic,
+  // Transform
+  setScale,
+  setRotation,
+  adjustRotation,
+  flipH,
+  flipV,
+  // Visibility
+  hideObject,
+  showObject,
+  // Effects
+  fadeIn,
+  fadeOut,
+  setAlpha,
 }
 
 extension ActionTypeExtension on ActionType {
@@ -81,6 +135,48 @@ extension ActionTypeExtension on ActionType {
         ActionType.playMusic => 'Play music track',
         ActionType.playSfx => 'Play sound effect',
         ActionType.stopMusic => 'Stop music',
+        ActionType.setScale => 'Set scale',
+        ActionType.setRotation => 'Set rotation',
+        ActionType.adjustRotation => 'Adjust rotation (relative)',
+        ActionType.flipH => 'Flip horizontally',
+        ActionType.flipV => 'Flip vertically',
+        ActionType.hideObject => 'Hide object',
+        ActionType.showObject => 'Show object',
+        ActionType.fadeIn => 'Fade in',
+        ActionType.fadeOut => 'Fade out',
+        ActionType.setAlpha => 'Set opacity',
+      };
+
+  ActionCategory get category => switch (this) {
+        ActionType.movePlayer ||
+        ActionType.adjustHealth ||
+        ActionType.adjustScore =>
+          ActionCategory.player,
+        ActionType.enemyChasePlayer ||
+        ActionType.enemyPatrol ||
+        ActionType.enemyStopMoving =>
+          ActionCategory.enemy,
+        ActionType.destroyTriggerObject ||
+        ActionType.showMessage ||
+        ActionType.loadMap =>
+          ActionCategory.world,
+        ActionType.gameOver || ActionType.winGame => ActionCategory.game,
+        ActionType.playMusic ||
+        ActionType.playSfx ||
+        ActionType.stopMusic =>
+          ActionCategory.audio,
+        ActionType.setScale ||
+        ActionType.setRotation ||
+        ActionType.adjustRotation ||
+        ActionType.flipH ||
+        ActionType.flipV ||
+        ActionType.hideObject ||
+        ActionType.showObject =>
+          ActionCategory.world,
+        ActionType.fadeIn ||
+        ActionType.fadeOut ||
+        ActionType.setAlpha =>
+          ActionCategory.effects,
       };
 
   /// Parameter keys this action expects.
@@ -118,6 +214,72 @@ extension ActionTypeExtension on ActionType {
         ActionType.playSfx =>
           [ActionParam('sfxName', ActionParamType.text, label: 'Sound name', hint: 'coin')],
         ActionType.stopMusic => [],
+        ActionType.setScale => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('value', ActionParamType.text, label: 'Scale', hint: '1.5'),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.setRotation => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('angle', ActionParamType.number, label: 'Angle °', hint: '90'),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.adjustRotation => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('angle', ActionParamType.number, label: 'Δ Angle °', hint: '10'),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.flipH => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.flipV => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.hideObject => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.showObject => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.fadeIn => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('duration', ActionParamType.text, label: 'Duration (s)', hint: '1.0'),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.fadeOut => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('duration', ActionParamType.text, label: 'Duration (s)', hint: '1.0'),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.setAlpha => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('value', ActionParamType.text, label: 'Opacity', hint: '0.5  (0 – 1)'),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
       };
 
   String summarize(Map<String, dynamic> p) => switch (this) {
@@ -152,17 +314,71 @@ extension ActionTypeExtension on ActionType {
         ActionType.playMusic => 'Play music: ${p['trackName'] ?? ''}',
         ActionType.playSfx => 'Play sfx: ${p['sfxName'] ?? ''}',
         ActionType.stopMusic => 'Stop music',
+        ActionType.setScale => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Scale ${p['value'] ?? '1.0'}× ($who)';
+          }(),
+        ActionType.setRotation => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Rotate ${p['angle'] ?? 0}° ($who)';
+          }(),
+        ActionType.adjustRotation => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            final a = p['angle'] ?? 0;
+            return 'Rotate ${a >= 0 ? '+' : ''}$a° ($who)';
+          }(),
+        ActionType.flipH => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Flip H ($who)';
+          }(),
+        ActionType.flipV => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Flip V ($who)';
+          }(),
+        ActionType.hideObject => () {
+            final t = p['target'] as String? ?? 'trigger';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Hide $who';
+          }(),
+        ActionType.showObject => () {
+            final t = p['target'] as String? ?? 'trigger';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Show $who';
+          }(),
+        ActionType.fadeIn => () {
+            final t = p['target'] as String? ?? 'trigger';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Fade in $who (${p['duration'] ?? '1.0'}s)';
+          }(),
+        ActionType.fadeOut => () {
+            final t = p['target'] as String? ?? 'trigger';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Fade out $who (${p['duration'] ?? '1.0'}s)';
+          }(),
+        ActionType.setAlpha => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Opacity ${p['value'] ?? '1.0'} ($who)';
+          }(),
       };
 }
 
-enum ActionParamType { number, text }
+enum ActionParamType { number, text, choice }
 
 class ActionParam {
   final String key;
   final ActionParamType type;
   final String label;
   final String hint;
-  const ActionParam(this.key, this.type, {required this.label, this.hint = ''});
+  /// For [ActionParamType.choice]: stored-value → display-label (insertion order preserved).
+  final Map<String, String>? choices;
+  const ActionParam(this.key, this.type,
+      {required this.label, this.hint = '', this.choices});
 }
 
 class RuleAction {
@@ -186,40 +402,72 @@ class RuleAction {
 class GameRule {
   String id;
   String name;
-  TriggerType trigger;
+  List<RuleCondition> conditions;
+  List<ConditionOp> operators; // length = conditions.length - 1
   List<RuleAction> actions;
   bool enabled;
+  Map<String, dynamic> triggerParams; // extra params for the primary trigger (e.g. interval)
 
   GameRule({
     required this.name,
-    required this.trigger,
+    required this.conditions,
+    List<ConditionOp>? operators,
     List<RuleAction>? actions,
     bool? enabled,
     String? id,
+    Map<String, dynamic>? triggerParams,
   })  : id = id ?? 'rule_${DateTime.now().microsecondsSinceEpoch}',
+        operators = operators ?? [],
         actions = actions ?? [],
-        enabled = enabled ?? true;
+        enabled = enabled ?? true,
+        triggerParams = triggerParams ?? {};
+
+  /// Primary trigger — the event that buckets this rule. Backward-compat getter.
+  TriggerType get trigger => conditions.first.trigger;
 
   String get summary {
     if (actions.isEmpty) return 'No actions';
     return actions.map((a) => a.type.summarize(a.params)).join(', ');
   }
 
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'trigger': trigger.index,
-        'actions': actions.map((a) => a.toJson()).toList(),
-        'enabled': enabled,
-      };
+  Map<String, dynamic> toJson() {
+    final map = <String, dynamic>{
+      'id': id,
+      'name': name,
+      'conditions': conditions.map((c) => c.toJson()).toList(),
+      'operators': operators.map((o) => o.index).toList(),
+      'actions': actions.map((a) => a.toJson()).toList(),
+      'enabled': enabled,
+    };
+    if (triggerParams.isNotEmpty) map['triggerParams'] = triggerParams;
+    return map;
+  }
 
-  factory GameRule.fromJson(Map<String, dynamic> json) => GameRule(
-        id: json['id'] as String,
-        name: json['name'] as String,
-        trigger: TriggerType.values[json['trigger'] as int],
-        actions: (json['actions'] as List)
-            .map((a) => RuleAction.fromJson(a as Map<String, dynamic>))
-            .toList(),
-        enabled: json['enabled'] as bool? ?? true,
-      );
+  factory GameRule.fromJson(Map<String, dynamic> json) {
+    // Migrate old single-trigger format
+    List<RuleCondition> conditions;
+    List<ConditionOp> operators;
+    if (json.containsKey('conditions')) {
+      conditions = (json['conditions'] as List)
+          .map((c) => RuleCondition.fromJson(c as Map<String, dynamic>))
+          .toList();
+      operators = (json['operators'] as List? ?? [])
+          .map((o) => ConditionOp.values[o as int])
+          .toList();
+    } else {
+      conditions = [RuleCondition(trigger: TriggerType.values[json['trigger'] as int])];
+      operators = [];
+    }
+    return GameRule(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      conditions: conditions,
+      operators: operators,
+      actions: (json['actions'] as List)
+          .map((a) => RuleAction.fromJson(a as Map<String, dynamic>))
+          .toList(),
+      enabled: json['enabled'] as bool? ?? true,
+      triggerParams: Map<String, dynamic>.from(json['triggerParams'] as Map? ?? {}),
+    );
+  }
 }

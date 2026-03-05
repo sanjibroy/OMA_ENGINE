@@ -105,7 +105,7 @@ class _MapsSectionState extends State<_MapsSection> {
     final newName = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF201E1C),
+        backgroundColor: AppColors.dialogBg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
           side: const BorderSide(color: AppColors.borderColor),
@@ -259,7 +259,7 @@ class _MapsSectionState extends State<_MapsSection> {
     final isStart = map.id == _es.project.startMapId;
     showMenu<String>(
       context: context,
-      color: const Color(0xFF201E1C),
+      color: AppColors.dialogBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: const BorderSide(color: AppColors.borderColor),

@@ -34,6 +34,7 @@ dependencies:
   file_picker: ^6.2.0
   audioplayers: ^5.2.1
   cupertino_icons: ^1.0.2
+  window_manager: ^0.3.8
 
 dev_dependencies:
   flutter_test:

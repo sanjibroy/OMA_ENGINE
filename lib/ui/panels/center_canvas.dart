@@ -89,6 +89,8 @@ class _CenterCanvasState extends State<CenterCanvas> {
         _isWin = false;
       });
       _game.setShowCollision(false); // hide collision overlay during play
+      _game.allowGameZoom = _state.project.allowZoom;
+      _game.gameMaxZoom = _state.project.maxZoom;
       _game.startPlay(
         viewportWidth: _state.project.viewportWidth,
         viewportHeight: _state.project.viewportHeight,
@@ -100,6 +102,10 @@ class _CenterCanvasState extends State<CenterCanvas> {
     } else {
       _game.stopPlay();
       _state.audioManager.stopAll();
+      // Clear stale selection — stopPlay() replaces mapData.objects with new
+      // instances, so selectedObject would point to a dead reference.
+      _state.selectedObject.value = null;
+      _game.setSelectedObject(null);
       // Restore collision overlay if collision tool is still active
       _game.setShowCollision(_state.activeTool.value == EditorTool.collision);
     }
@@ -212,7 +218,8 @@ class _CenterCanvasState extends State<CenterCanvas> {
           _game.setSelectedObject(existing.id);
         } else {
           final placed = _game.placeObject(
-              e.localPosition, _state.selectedObjectType.value, _state);
+              e.localPosition, _state.selectedObjectType.value, _state,
+              inheritFrom: _state.selectedObject.value);
           _state.selectedObject.value = placed;
           _game.setSelectedObject(placed?.id);
         }

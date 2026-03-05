@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../../editor/editor_state.dart';
 import '../../models/game_object.dart';
 import '../../models/game_project.dart';
+import '../../models/map_data.dart';
 import '../../models/game_rule.dart';
 import '../../theme/app_theme.dart';
 import '../dialogs/rule_editor_dialog.dart';
@@ -148,7 +149,7 @@ class _PropertiesTabState extends State<_PropertiesTab> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        // ── Map properties ─────────────────────────────
+        // ── Map properties ───────────────────────────────
         _sectionLabel('MAP'),
         const SizedBox(height: 8),
         _propertyRow('Name', map.name),
@@ -159,11 +160,9 @@ class _PropertiesTabState extends State<_PropertiesTab> {
 
         const SizedBox(height: 16),
 
-        // ── Project settings ────────────────────────────
+        // ── Project settings ─────────────────────────────
         _sectionLabel('PROJECT SETTINGS'),
         const SizedBox(height: 10),
-
-        // HUD Position toggle
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -192,43 +191,58 @@ class _PropertiesTabState extends State<_PropertiesTab> {
 
         const SizedBox(height: 16),
 
-        // ── Player settings ─────────────────────────────
-        _sectionLabel('PLAYER'),
-        const SizedBox(height: 10),
-        _inputRow('Speed', project.playerSpeed.toString(),
-            isDecimal: true, onChanged: _setPlayerSpeed),
-        const SizedBox(height: 6),
-        _inputRow('Health', project.playerHealth.toString(),
-            onChanged: _setPlayerHealth),
-        const SizedBox(height: 6),
-        _inputRow('Lives', project.playerLives.toString(),
-            onChanged: _setPlayerLives),
-
-        const SizedBox(height: 16),
-
-        // ── Selected object ─────────────────────────────
-        _sectionLabel('SELECTED OBJECT'),
-        const SizedBox(height: 8),
-        ValueListenableBuilder<GameObject?>(
-          valueListenable: widget.editorState.selectedObject,
-          builder: (_, obj, __) {
-            if (obj == null) {
-              return const Center(
-                child: Text('Nothing selected',
-                    style: TextStyle(
-                        color: AppColors.textMuted, fontSize: 12)),
+        // ── Bottom section: context-sensitive ────────────
+        ValueListenableBuilder<EditorTool>(
+          valueListenable: widget.editorState.activeTool,
+          builder: (_, tool, __) {
+            // Object tool — show selected object or player defaults
+            if (tool == EditorTool.object) {
+              return ValueListenableBuilder<GameObject?>(
+                valueListenable: widget.editorState.selectedObject,
+                builder: (_, obj, __) {
+                  if (obj != null) {
+                    return _ObjectPropsForm(
+                      key: ValueKey(obj.id),
+                      obj: obj,
+                      editorState: widget.editorState,
+                    );
+                  }
+                  return _playerSection(project);
+                },
               );
             }
-            return _ObjectPropsForm(
-              key: ValueKey(obj.id),
-              obj: obj,
-              editorState: widget.editorState,
+
+            // Tile / Collision tool — show hovered tile info
+            return ValueListenableBuilder<(int, int)?>(
+              valueListenable: widget.editorState.hoverTile,
+              builder: (_, hover, __) {
+                return _TileInfoSection(
+                  editorState: widget.editorState,
+                  hover: hover,
+                );
+              },
             );
           },
         ),
       ],
     );
   }
+
+  Widget _playerSection(GameProject project) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionLabel('PLAYER'),
+          const SizedBox(height: 10),
+          _inputRow('Speed', project.playerSpeed.toString(),
+              isDecimal: true, onChanged: _setPlayerSpeed),
+          const SizedBox(height: 6),
+          _inputRow('Health', project.playerHealth.toString(),
+              onChanged: _setPlayerHealth),
+          const SizedBox(height: 6),
+          _inputRow('Lives', project.playerLives.toString(),
+              onChanged: _setPlayerLives),
+        ],
+      );
 
   Widget _inputRow(String label, String value,
       {bool isDecimal = false, required void Function(String) onChanged}) {
@@ -364,8 +378,131 @@ class _ObjectPropsForm extends StatefulWidget {
 }
 
 class _ObjectPropsFormState extends State<_ObjectPropsForm> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _tagCtrl;
+
+  bool _transformExpanded = true;
+  bool _fxExpanded = true;
+  bool _propsExpanded = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.obj.name);
+    _tagCtrl  = TextEditingController(text: widget.obj.tag);
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _tagCtrl.dispose();
+    super.dispose();
+  }
+
+  void _setName(String v) {
+    final trimmed = v.trim();
+    if (trimmed.isEmpty) return;
+    setState(() => widget.obj.name = trimmed);
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setTag(String v) {
+    setState(() => widget.obj.tag = v.trim());
+    widget.editorState.notifyMapChanged();
+  }
+
   void _set(String key, dynamic value) {
     setState(() => widget.obj.properties[key] = value);
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setFlipH(bool v) {
+    setState(() => widget.obj.flipH = v);
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setFlipV(bool v) {
+    setState(() => widget.obj.flipV = v);
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setScale(double v) {
+    setState(() => widget.obj.scale = v.clamp(0.25, 4.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setRotation(double v) {
+    setState(() => widget.obj.rotation = v % 360);
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setAlpha(double v) {
+    setState(() => widget.obj.alpha = v.clamp(0.0, 1.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setFloatAmplitude(double v) {
+    setState(() => widget.obj.floatAmplitude = v.clamp(1.0, 32.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setFloatSpeed(double v) {
+    setState(() => widget.obj.floatSpeed = v.clamp(0.1, 5.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setProjectileAngle(double v) {
+    setState(() => widget.obj.projectileAngle = v % 360);
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setProjectileSpeed(double v) {
+    setState(() => widget.obj.projectileSpeed = v.clamp(0.5, 20.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setProjectileRange(double v) {
+    setState(() => widget.obj.projectileRange = v.clamp(1.0, 20.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setProjectileArc(double v) {
+    setState(() => widget.obj.projectileArc = v.clamp(0.0, 10.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setDashAngle(double v) {
+    setState(() => widget.obj.dashAngle = v % 360);
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setDashDistance(double v) {
+    setState(() => widget.obj.dashDistance = v.clamp(0.5, 10.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setDashSpeed(double v) {
+    setState(() => widget.obj.dashSpeed = v.clamp(1.0, 20.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setDashInterval(double v) {
+    setState(() => widget.obj.dashInterval = v.clamp(0.5, 10.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setHidden(bool v) {
+    setState(() => widget.obj.hidden = v);
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _resetTransform() {
+    setState(() {
+      widget.obj.flipH = false;
+      widget.obj.flipV = false;
+      widget.obj.scale = 1.0;
+      widget.obj.rotation = 0.0;
+    });
     widget.editorState.notifyMapChanged();
   }
 
@@ -400,14 +537,204 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
                     color: AppColors.textPrimary,
                     fontSize: 13,
                     fontWeight: FontWeight.w600)),
+            const Spacer(),
+            Tooltip(
+              message: obj.hidden ? 'Show object' : 'Hide object',
+              child: GestureDetector(
+                onTap: () => _setHidden(!obj.hidden),
+                child: Icon(
+                  obj.hidden ? Icons.visibility_off : Icons.visibility,
+                  size: 16,
+                  color: obj.hidden ? AppColors.textMuted : AppColors.textSecondary,
+                ),
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 8),
+        // Editable name
+        _label('NAME'),
+        const SizedBox(height: 4),
+        _stringField(_nameCtrl, hint: obj.type.label, onChanged: _setName, onSubmitted: _setName),
+        const SizedBox(height: 6),
+        // Tag
+        _label('TAG'),
+        const SizedBox(height: 4),
+        _stringField(_tagCtrl, hint: 'e.g. breakable', onChanged: _setTag),
+        const SizedBox(height: 8),
         _propRow('Tile X', '${obj.tileX}'),
         _propRow('Tile Y', '${obj.tileY}'),
-        const SizedBox(height: 8),
-        // Type-specific editable fields
-        ..._buildTypeFields(obj, es),
+        const SizedBox(height: 10),
+
+        // ── Transform ──────────────────────────────────
+        _sectionHeader(
+          'TRANSFORM',
+          _transformExpanded,
+          () => setState(() => _transformExpanded = !_transformExpanded),
+          trailing: (obj.flipH || obj.flipV || obj.scale != 1.0 || obj.rotation != 0.0)
+              ? GestureDetector(
+                  onTap: _resetTransform,
+                  child: const Text('Reset',
+                      style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                )
+              : null,
+        ),
+        if (_transformExpanded) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              _flipBtn(
+                icon: Icons.flip,
+                label: 'H',
+                tooltip: 'Flip Horizontal',
+                active: obj.flipH,
+                onTap: () => _setFlipH(!obj.flipH),
+              ),
+              const SizedBox(width: 6),
+              _flipBtn(
+                icon: Icons.flip,
+                label: 'V',
+                tooltip: 'Flip Vertical',
+                active: obj.flipV,
+                rotate: true,
+                onTap: () => _setFlipV(!obj.flipV),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          _transformRow(
+            label: 'Scale',
+            display: '${obj.scale.toStringAsFixed(2)}×',
+            onDecrement: () => _setScale(obj.scale - 0.25),
+            onIncrement: () => _setScale(obj.scale + 0.25),
+          ),
+          const SizedBox(height: 4),
+          _transformRow(
+            label: 'Rotate',
+            display: '${obj.rotation.toStringAsFixed(0)}°',
+            onDecrement: () => _setRotation(obj.rotation - 45),
+            onIncrement: () => _setRotation(obj.rotation + 45),
+          ),
+          const SizedBox(height: 4),
+          _transformRow(
+            label: 'Alpha',
+            display: '${(obj.alpha * 100).round()}%',
+            onDecrement: () => _setAlpha(obj.alpha - 0.1),
+            onIncrement: () => _setAlpha(obj.alpha + 0.1),
+          ),
+          const SizedBox(height: 4),
+        ],
+
+        // ── FX ─────────────────────────────────────────
+        _sectionHeader('FX', _fxExpanded,
+            () => setState(() => _fxExpanded = !_fxExpanded)),
+        if (_fxExpanded) ...[
+          const SizedBox(height: 4),
+          // Float
+          _fxToggle('Float', obj.floatEnabled, () {
+            setState(() => obj.floatEnabled = !obj.floatEnabled);
+            widget.editorState.notifyMapChanged();
+          }),
+          if (obj.floatEnabled) ...[
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Height',
+              display: '${obj.floatAmplitude.toStringAsFixed(0)}px',
+              onDecrement: () => _setFloatAmplitude(obj.floatAmplitude - 1),
+              onIncrement: () => _setFloatAmplitude(obj.floatAmplitude + 1),
+            ),
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Speed',
+              display: '${obj.floatSpeed.toStringAsFixed(1)}×',
+              onDecrement: () => _setFloatSpeed(obj.floatSpeed - 0.1),
+              onIncrement: () => _setFloatSpeed(obj.floatSpeed + 0.1),
+            ),
+          ],
+          const SizedBox(height: 6),
+          // Projectile
+          _fxToggle('Projectile', obj.projectileEnabled, () {
+            setState(() => obj.projectileEnabled = !obj.projectileEnabled);
+            widget.editorState.notifyMapChanged();
+          }),
+          if (obj.projectileEnabled) ...[
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Angle',
+              display: '${obj.projectileAngle.toStringAsFixed(0)}°',
+              onDecrement: () => _setProjectileAngle(obj.projectileAngle - 45),
+              onIncrement: () => _setProjectileAngle(obj.projectileAngle + 45),
+            ),
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Speed',
+              display: '${obj.projectileSpeed.toStringAsFixed(1)} t/s',
+              onDecrement: () => _setProjectileSpeed(obj.projectileSpeed - 0.5),
+              onIncrement: () => _setProjectileSpeed(obj.projectileSpeed + 0.5),
+            ),
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Range',
+              display: '${obj.projectileRange.toStringAsFixed(0)} t',
+              onDecrement: () => _setProjectileRange(obj.projectileRange - 1),
+              onIncrement: () => _setProjectileRange(obj.projectileRange + 1),
+            ),
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Arc',
+              display: '${obj.projectileArc.toStringAsFixed(1)} t',
+              onDecrement: () => _setProjectileArc(obj.projectileArc - 0.5),
+              onIncrement: () => _setProjectileArc(obj.projectileArc + 0.5),
+            ),
+          ],
+          const SizedBox(height: 6),
+          // Dash
+          _fxToggle('Dash', obj.dashEnabled, () {
+            setState(() => obj.dashEnabled = !obj.dashEnabled);
+            widget.editorState.notifyMapChanged();
+          }),
+          if (obj.dashEnabled) ...[
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Angle',
+              display: '${obj.dashAngle.toStringAsFixed(0)}°',
+              onDecrement: () => _setDashAngle(obj.dashAngle - 45),
+              onIncrement: () => _setDashAngle(obj.dashAngle + 45),
+            ),
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Dist',
+              display: '${obj.dashDistance.toStringAsFixed(1)} t',
+              onDecrement: () => _setDashDistance(obj.dashDistance - 0.5),
+              onIncrement: () => _setDashDistance(obj.dashDistance + 0.5),
+            ),
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Speed',
+              display: '${obj.dashSpeed.toStringAsFixed(1)} t/s',
+              onDecrement: () => _setDashSpeed(obj.dashSpeed - 1),
+              onIncrement: () => _setDashSpeed(obj.dashSpeed + 1),
+            ),
+            const SizedBox(height: 4),
+            _transformRow(
+              label: 'Pause',
+              display: '${obj.dashInterval.toStringAsFixed(1)}s',
+              onDecrement: () => _setDashInterval(obj.dashInterval - 0.5),
+              onIncrement: () => _setDashInterval(obj.dashInterval + 0.5),
+            ),
+          ],
+          const SizedBox(height: 4),
+        ],
+
+        // ── Properties ─────────────────────────────────
+        if (obj.type != GameObjectType.playerSpawn) ...[
+          _sectionHeader(
+            'PROPERTIES',
+            _propsExpanded,
+            () => setState(() => _propsExpanded = !_propsExpanded),
+          ),
+          if (_propsExpanded) ..._buildTypeFields(obj, es),
+        ],
       ],
     );
   }
@@ -475,6 +802,26 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
         return [];
     }
   }
+
+  Widget _stringField(
+    TextEditingController ctrl, {
+    required String hint,
+    void Function(String)? onChanged,
+    void Function(String)? onSubmitted,
+  }) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 0),
+        child: SizedBox(
+          height: 30,
+          child: TextField(
+            controller: ctrl,
+            style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
+            decoration: _inputDeco(hint: hint),
+            onChanged: onChanged,
+            onSubmitted: onSubmitted,
+          ),
+        ),
+      );
 
   Widget _propRow(String label, String value) => Padding(
         padding: const EdgeInsets.only(bottom: 4),
@@ -554,13 +901,174 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
 
   Widget _label(String text) => Text(text,
       style: const TextStyle(
-          color: AppColors.textSecondary,
-          fontSize: 11,
-          fontWeight: FontWeight.w600));
+          color: AppColors.textMuted,
+          fontSize: 10,
+          letterSpacing: 1.2,
+          fontWeight: FontWeight.w700));
 
-  InputDecoration _inputDeco() => InputDecoration(
+  Widget _sectionHeader(String title, bool expanded, VoidCallback onToggle, {Widget? trailing}) =>
+      GestureDetector(
+        onTap: onToggle,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            children: [
+              Icon(
+                expanded ? Icons.expand_more : Icons.chevron_right,
+                size: 13,
+                color: AppColors.textMuted,
+              ),
+              const SizedBox(width: 4),
+              Text(title,
+                  style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.0)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Container(height: 1, color: AppColors.borderColor),
+              ),
+              if (trailing != null) ...[const SizedBox(width: 8), trailing],
+            ],
+          ),
+        ),
+      );
+
+  Widget _fxToggle(String name, bool enabled, VoidCallback onToggle) =>
+      GestureDetector(
+        onTap: onToggle,
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          children: [
+            Text(name,
+                style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(width: 8),
+            Expanded(child: Container(height: 1, color: AppColors.borderColor)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: enabled ? AppColors.accent.withOpacity(0.18) : AppColors.surfaceBg,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                    color: enabled ? AppColors.accent : AppColors.borderColor),
+              ),
+              child: Text(
+                enabled ? 'ON' : 'OFF',
+                style: TextStyle(
+                    color: enabled ? AppColors.accent : AppColors.textMuted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+      );
+
+  Widget _flipBtn({
+    required IconData icon,
+    required String label,
+    required String tooltip,
+    required bool active,
+    required VoidCallback onTap,
+    bool rotate = false,
+  }) =>
+      Tooltip(
+        message: tooltip,
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: active
+                  ? AppColors.accent.withOpacity(0.15)
+                  : AppColors.surfaceBg,
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(
+                color: active
+                    ? AppColors.accent.withOpacity(0.6)
+                    : AppColors.borderColor,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Transform.rotate(
+                  angle: rotate ? 1.5708 : 0, // 90° for vertical flip icon
+                  child: Icon(icon,
+                      size: 13,
+                      color: active
+                          ? AppColors.accent
+                          : AppColors.textSecondary),
+                ),
+                const SizedBox(width: 4),
+                Text(label,
+                    style: TextStyle(
+                        color: active
+                            ? AppColors.accent
+                            : AppColors.textSecondary,
+                        fontSize: 11,
+                        fontWeight: active
+                            ? FontWeight.w600
+                            : FontWeight.normal)),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  Widget _transformRow({
+    required String label,
+    required String display,
+    required VoidCallback onDecrement,
+    required VoidCallback onIncrement,
+  }) =>
+      Row(
+        children: [
+          SizedBox(
+            width: 46,
+            child: Text(label,
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 12)),
+          ),
+          _stepBtn(Icons.remove, onDecrement),
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 46,
+            child: Text(display,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: AppColors.textPrimary, fontSize: 12)),
+          ),
+          const SizedBox(width: 4),
+          _stepBtn(Icons.add, onIncrement),
+        ],
+      );
+
+  Widget _stepBtn(IconData icon, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceBg,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: AppColors.borderColor),
+          ),
+          child: Icon(icon, size: 11, color: AppColors.textSecondary),
+        ),
+      );
+
+  InputDecoration _inputDeco({String? hint}) => InputDecoration(
         filled: true,
         fillColor: AppColors.surfaceBg,
+        hintText: hint,
+        hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 12),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         border: OutlineInputBorder(
@@ -574,6 +1082,88 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(5),
           borderSide: const BorderSide(color: AppColors.accent),
+        ),
+      );
+}
+
+// ─── Tile Info Section ────────────────────────────────────────────────────────
+
+class _TileInfoSection extends StatelessWidget {
+  final EditorState editorState;
+  final (int, int)? hover;
+  const _TileInfoSection({required this.editorState, required this.hover});
+
+  @override
+  Widget build(BuildContext context) {
+    final es = editorState;
+    final map = es.mapData;
+
+    return ValueListenableBuilder<TileType>(
+      valueListenable: es.selectedTile,
+      builder: (_, selTile, __) {
+        return ValueListenableBuilder<int>(
+          valueListenable: es.selectedTileVariant,
+          builder: (_, selVariant, __) {
+            final rows = <Widget>[
+              _label('SELECTED TILE'),
+              const SizedBox(height: 8),
+              _row('Type', selTile.label),
+              if (selVariant > 0) _row('Variant', '$selVariant'),
+            ];
+
+            if (hover != null) {
+              final (tx, ty) = hover!;
+              final hType = map.getTile(tx, ty);
+              final hVariant = map.getTileVariant(tx, ty);
+              final hColl = map.getTileCollision(tx, ty);
+              final collLabel = switch (hColl) {
+                1 => 'Force passable',
+                2 => 'Force solid',
+                _ => 'Default',
+              };
+              rows.addAll([
+                const SizedBox(height: 14),
+                _label('HOVERED TILE'),
+                const SizedBox(height: 8),
+                _row('Position', '($tx, $ty)'),
+                _row('Type', hType.label),
+                if (hVariant > 0) _row('Variant', '$hVariant'),
+                _row('Collision', collLabel),
+              ]);
+            }
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: rows,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _label(String text) => Text(
+        text,
+        style: const TextStyle(
+          color: AppColors.textMuted,
+          fontSize: 10,
+          letterSpacing: 1.2,
+          fontWeight: FontWeight.w700,
+        ),
+      );
+
+  Widget _row(String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label,
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 12)),
+            Text(value,
+                style: const TextStyle(
+                    color: AppColors.textPrimary, fontSize: 12)),
+          ],
         ),
       );
 }
@@ -639,11 +1229,40 @@ class _RulesTabState extends State<_RulesTab> {
     setState(() {});
   }
 
+  Future<void> _openManager() async {
+    await _RulesManagerDialog.show(context, widget.editorState);
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final hasOtherMaps = widget.editorState.project.maps.length > 1;
     return Column(
       children: [
+        // ── Header ──
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 7, 8, 7),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: AppColors.borderColor)),
+          ),
+          child: Row(
+            children: [
+              Text(
+                '${_rules.length} rule${_rules.length == 1 ? '' : 's'}',
+                style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+              ),
+              const Spacer(),
+              Tooltip(
+                message: 'Open rules manager',
+                child: GestureDetector(
+                  onTap: _openManager,
+                  child: const Icon(Icons.open_in_full,
+                      size: 14, color: AppColors.textSecondary),
+                ),
+              ),
+            ],
+          ),
+        ),
         Expanded(
           child: _rules.isEmpty
               ? Center(
@@ -856,6 +1475,295 @@ class _RuleCard extends StatelessWidget {
       );
 }
 
+// ─── Rules Manager Dialog ─────────────────────────────────────────────────────
+
+class _RulesManagerDialog extends StatefulWidget {
+  final EditorState editorState;
+  const _RulesManagerDialog({required this.editorState});
+
+  static Future<void> show(BuildContext context, EditorState es) {
+    return showDialog(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (_) => _RulesManagerDialog(editorState: es),
+    );
+  }
+
+  @override
+  State<_RulesManagerDialog> createState() => _RulesManagerDialogState();
+}
+
+class _RulesManagerDialogState extends State<_RulesManagerDialog> {
+  List<GameRule> get _rules => widget.editorState.mapData.rules;
+
+  Future<void> _addRule() async {
+    widget.editorState.pushUndo();
+    final rule = await RuleEditorDialog.show(
+      context,
+      availableMaps: widget.editorState.project.maps,
+    );
+    if (rule != null && mounted) setState(() => _rules.add(rule));
+  }
+
+  Future<void> _editRule(int index) async {
+    widget.editorState.pushUndo();
+    final rule = await RuleEditorDialog.show(
+      context,
+      existing: _rules[index],
+      availableMaps: widget.editorState.project.maps,
+    );
+    if (rule != null && mounted) setState(() => _rules[index] = rule);
+  }
+
+  void _deleteRule(int index) {
+    widget.editorState.pushUndo();
+    setState(() => _rules.removeAt(index));
+  }
+
+  void _toggleRule(int index, bool val) =>
+      setState(() => _rules[index].enabled = val);
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: AppColors.panelBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: const BorderSide(color: AppColors.borderColor),
+      ),
+      child: SizedBox(
+        width: 780,
+        height: 560,
+        child: Column(
+          children: [
+            _buildHeader(),
+            Expanded(child: _buildBody()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() => Container(
+        padding: const EdgeInsets.fromLTRB(18, 12, 14, 12),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: AppColors.borderColor)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.bolt, color: AppColors.accent, size: 16),
+            const SizedBox(width: 8),
+            const Text('Rules Manager',
+                style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(width: 10),
+            Text('${_rules.length} rule${_rules.length == 1 ? '' : 's'}',
+                style: const TextStyle(
+                    color: AppColors.textMuted, fontSize: 12)),
+            const Spacer(),
+            GestureDetector(
+              onTap: _addRule,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(6),
+                  border:
+                      Border.all(color: AppColors.accent.withOpacity(0.4)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.add, size: 13, color: AppColors.accent),
+                    SizedBox(width: 5),
+                    Text('Add Rule',
+                        style: TextStyle(
+                            color: AppColors.accent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: const Icon(Icons.close,
+                  color: AppColors.textSecondary, size: 16),
+            ),
+          ],
+        ),
+      );
+
+  Widget _buildBody() {
+    if (_rules.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.bolt, color: AppColors.textMuted, size: 40),
+            SizedBox(height: 10),
+            Text('No rules yet',
+                style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
+            SizedBox(height: 4),
+            Text('Click Add Rule to get started',
+                style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+          ],
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(14),
+      itemCount: _rules.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, i) => _buildRuleRow(i),
+    );
+  }
+
+  Widget _buildRuleRow(int i) {
+    final rule = _rules[i];
+    return Container(
+      decoration: BoxDecoration(
+        color: rule.enabled ? AppColors.surfaceBg : AppColors.surfaceBg.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.borderColor),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Toggle
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: _miniSwitch(rule.enabled, (v) => _toggleRule(i, v)),
+            ),
+            const SizedBox(width: 12),
+            // Rule info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(rule.name,
+                      style: TextStyle(
+                          color: rule.enabled
+                              ? AppColors.textPrimary
+                              : AppColors.textMuted,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  _buildConditionsSummary(rule),
+                  const SizedBox(height: 4),
+                  _infoChip('THEN', rule.summary, AppColors.success),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            // Actions
+            Column(
+              children: [
+                GestureDetector(
+                  onTap: () => _editRule(i),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: AppColors.dialogSurface,
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(color: AppColors.borderColor),
+                    ),
+                    child: const Text('Edit',
+                        style: TextStyle(
+                            color: AppColors.textSecondary, fontSize: 11)),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                GestureDetector(
+                  onTap: () => _deleteRule(i),
+                  child: const Icon(Icons.delete_outline,
+                      size: 16, color: AppColors.textMuted),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConditionsSummary(GameRule rule) {
+    if (rule.conditions.length == 1) {
+      final c = rule.conditions.first;
+      return _infoChip('WHEN', c.trigger.label, AppColors.accent);
+    }
+    // Multi-condition: build inline summary
+    final parts = <String>[];
+    for (int i = 0; i < rule.conditions.length; i++) {
+      final c = rule.conditions[i];
+      if (i > 0) {
+        parts.add(rule.operators[i - 1] == ConditionOp.and ? 'AND' : 'OR');
+      }
+      parts.add(c.negate ? 'NOT ${c.trigger.label}' : c.trigger.label);
+    }
+    return _infoChip('WHEN', parts.join('  '), AppColors.accent);
+  }
+
+  Widget _infoChip(String tag, String text, Color color) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+            margin: const EdgeInsets.only(top: 1, right: 7),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(tag,
+                style: TextStyle(
+                    color: color,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5)),
+          ),
+          Expanded(
+            child: Text(text,
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 12)),
+          ),
+        ],
+      );
+
+  Widget _miniSwitch(bool value, void Function(bool) onChanged) =>
+      GestureDetector(
+        onTap: () => onChanged(!value),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 28,
+          height: 16,
+          decoration: BoxDecoration(
+            color: value ? AppColors.accent : AppColors.borderColor,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: AnimatedAlign(
+            duration: const Duration(milliseconds: 150),
+            alignment:
+                value ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(
+              margin: const EdgeInsets.all(2),
+              width: 12,
+              height: 12,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
 // ─── Copy Rules Dialog ────────────────────────────────────────────────────────
 
 class _CopyRulesDialog extends StatefulWidget {
@@ -913,7 +1821,8 @@ class _CopyRulesDialogState extends State<_CopyRulesDialog> {
     for (final r in rules.where((r) => _checked.contains(r.id))) {
       _es.mapData.rules.add(GameRule(
         name: r.name,
-        trigger: r.trigger,
+        conditions: r.conditions.map((c) => RuleCondition(trigger: c.trigger, negate: c.negate)).toList(),
+        operators: List.from(r.operators),
         actions: r.actions
             .map((a) => RuleAction(type: a.type, params: Map.from(a.params)))
             .toList(),
@@ -931,7 +1840,7 @@ class _CopyRulesDialogState extends State<_CopyRulesDialog> {
         selectedRules.isNotEmpty && _checked.length == selectedRules.length;
 
     return Dialog(
-      backgroundColor: const Color(0xFF201E1C),
+      backgroundColor: AppColors.dialogBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
         side: const BorderSide(color: AppColors.borderColor),

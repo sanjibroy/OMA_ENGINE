@@ -1,3 +1,4 @@
+import 'dart:math' show pi, sin, cos;
 import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,61 @@ import '../models/game_object.dart';
 import '../models/game_rule.dart';
 import '../models/map_data.dart';
 import '../services/sprite_cache.dart';
+
+// ─── Fade animation helper ────────────────────────────────────────────────────
+
+class _FadeAnim {
+  final double from;
+  final double to;
+  final double duration;
+  double elapsed = 0;
+  _FadeAnim(this.from, this.to, this.duration);
+  double get alpha => duration <= 0 ? to : (from + (to - from) * (elapsed / duration).clamp(0.0, 1.0));
+  bool get isDone => elapsed >= duration;
+}
+
+// ─── Dash FX state machine ────────────────────────────────────────────────────
+
+class _DashFx {
+  final double _cosA;
+  final double _sinA;
+  final double _distancePx;
+  final double _speedPx;
+  final double _interval;
+
+  double _idleTimer = 0;
+  double _progress = 0; // 0 = at rest, 1 = full dash
+  bool _dashing = false;
+  bool _returning = false;
+
+  _DashFx({
+    required double angleRad,
+    required double distancePx,
+    required double speedPx,
+    required double interval,
+  })  : _cosA = cos(angleRad),
+        _sinA = sin(angleRad),
+        _distancePx = distancePx,
+        _speedPx = speedPx,
+        _interval = interval;
+
+  void update(double dt) {
+    final step = _distancePx > 0 ? (_speedPx * dt) / _distancePx : 1.0;
+    if (_dashing) {
+      _progress = (_progress + step).clamp(0.0, 1.0);
+      if (_progress >= 1.0) { _dashing = false; _returning = true; }
+    } else if (_returning) {
+      _progress = (_progress - step).clamp(0.0, 1.0);
+      if (_progress <= 0.0) { _returning = false; _idleTimer = 0; }
+    } else {
+      _idleTimer += dt;
+      if (_idleTimer >= _interval) _dashing = true;
+    }
+  }
+
+  double get offsetX => _progress * _distancePx * _cosA;
+  double get offsetY => _progress * _distancePx * _sinA;
+}
 
 // ─── Enemy runtime state ──────────────────────────────────────────────────────
 
@@ -16,6 +72,9 @@ class _Enemy {
   Vector2 pos;
 
   _EnemyBehavior behavior = _EnemyBehavior.idle;
+  bool hidden = false;
+  double alpha = 1.0;
+  _FadeAnim? fade;
   double pixelSpeed = 0;
   double chaseRangePx = 0;
 
@@ -79,13 +138,26 @@ class PlaySession {
   final void Function(String event) onGameEvent;
 
   late Vector2 _playerPos;
+  bool _playerFlipH = false;
+  bool _playerFlipV = false;
+  double _playerScale = 1.0;
+  double _playerRotation = 0.0;
   int _health = 100;
   int _score = 0;
   double _playerSpeedTiles = 4.0;
   double _elapsedSec = 0;
 
+  bool _playerHidden = false;
+  double _playerAlpha = 1.0;
+  _FadeAnim? _playerFade;
+  final Set<String> _hiddenObjectIds = {};
+  final Map<String, double> _objectAlpha = {};
+  final Map<String, _FadeAnim> _objectFades = {};
   final List<_Enemy> _enemies = [];
   final Map<String, double> _cooldowns = {};
+  final Map<String, double> _timerElapsed = {};
+  final Map<String, double> _projectileDist = {};
+  final Map<String, _DashFx> _dashFx = {};
   static const double _hitCooldown = 1.5;
 
   Vector2 get playerPos => _playerPos;
@@ -121,13 +193,26 @@ class PlaySession {
     _playerPos = spawn != null
         ? Vector2((spawn.tileX + 0.5) * ts, (spawn.tileY + 0.5) * ts)
         : Vector2(ts * 1.5, ts * 1.5);
+    _playerFlipH = spawn?.flipH ?? false;
+    _playerFlipV = spawn?.flipV ?? false;
+    _playerScale = spawn?.scale ?? 1.0;
+    _playerRotation = spawn?.rotation ?? 0.0;
 
     // Init enemies from map objects
     for (final obj in mapData.objects.where((o) => o.type == GameObjectType.enemy)) {
-      _enemies.add(_Enemy(
+      final e = _Enemy(
         source: obj,
         pos: Vector2((obj.tileX + 0.5) * ts, (obj.tileY + 0.5) * ts),
-      ));
+      );
+      e.hidden = obj.hidden;
+      e.alpha = obj.alpha;
+      _enemies.add(e);
+    }
+
+    // Init hidden/alpha state from object properties
+    for (final obj in mapData.objects) {
+      if (obj.hidden) _hiddenObjectIds.add(obj.id);
+      if (obj.alpha != 1.0) _objectAlpha[obj.id] = obj.alpha;
     }
 
     _applyStartRules();
@@ -138,6 +223,7 @@ class PlaySession {
     final ts = mapData.tileSize.toDouble();
     final maxX = mapData.width * ts;
     for (final rule in rules.where((r) => r.enabled && r.trigger == TriggerType.gameStart)) {
+      if (!_evalConditions(rule)) continue;
       // Enemy-specific setup (patrol/chase require access to _enemies list)
       for (final action in rule.actions) {
         final speed = ((action.params['speed'] as int?) ?? 2).toDouble();
@@ -164,10 +250,119 @@ class PlaySession {
   void update(double dt) {
     _elapsedSec += dt;
     _tickCooldowns(dt);
+    _updateFades(dt);
+    _updateFx(dt);
     _checkKeyTriggers(dt); // fires key rules + handles movement
+    _checkTimerRules(dt);
     _moveEnemies(dt);
     _checkCollisions();
     _checkProximityRules();
+  }
+
+  void _updateFx(double dt) {
+    final ts = mapData.tileSize.toDouble();
+    for (final obj in mapData.objects) {
+      if (obj.projectileEnabled) {
+        final speedPx = obj.projectileSpeed * ts;
+        final rangePx = obj.projectileRange * ts;
+        _projectileDist[obj.id] =
+            ((_projectileDist[obj.id] ?? 0.0) + speedPx * dt) % rangePx.clamp(0.01, double.infinity);
+      }
+      if (obj.dashEnabled) {
+        _dashFx.putIfAbsent(obj.id, () => _DashFx(
+              angleRad: obj.dashAngle * pi / 180.0,
+              distancePx: obj.dashDistance * ts,
+              speedPx: obj.dashSpeed * ts,
+              interval: obj.dashInterval,
+            )).update(dt);
+      }
+    }
+    for (final e in _enemies) {
+      final obj = e.source;
+      if (obj.projectileEnabled) {
+        final speedPx = obj.projectileSpeed * ts;
+        final rangePx = obj.projectileRange * ts;
+        _projectileDist[obj.id] =
+            ((_projectileDist[obj.id] ?? 0.0) + speedPx * dt) % rangePx.clamp(0.01, double.infinity);
+      }
+      if (obj.dashEnabled) {
+        _dashFx.putIfAbsent(obj.id, () => _DashFx(
+              angleRad: obj.dashAngle * pi / 180.0,
+              distancePx: obj.dashDistance * ts,
+              speedPx: obj.dashSpeed * ts,
+              interval: obj.dashInterval,
+            )).update(dt);
+      }
+    }
+  }
+
+  (double, double) _fxOffset(GameObject obj, double ts) {
+    double dx = 0, dy = 0;
+    if (obj.projectileEnabled) {
+      final dist = _projectileDist[obj.id] ?? 0.0;
+      final rad = obj.projectileAngle * pi / 180.0;
+      dx += dist * cos(rad);
+      dy += dist * sin(rad);
+      if (obj.projectileArc > 0) {
+        final rangePx = (obj.projectileRange * ts).clamp(0.01, double.infinity);
+        final progress = dist / rangePx;
+        // Arc goes UP (negative Y in screen space) at midpoint, back to 0 at ends
+        dy -= obj.projectileArc * ts * sin(pi * progress);
+      }
+    }
+    if (obj.dashEnabled) {
+      final fx = _dashFx[obj.id];
+      if (fx != null) { dx += fx.offsetX; dy += fx.offsetY; }
+    }
+    return (dx, dy);
+  }
+
+  void _checkTimerRules(double dt) {
+    final ts = mapData.tileSize.toDouble();
+    for (final rule in rules.where((r) => r.enabled && r.trigger == TriggerType.onTimer)) {
+      if (!_evalConditions(rule)) continue;
+      final interval = (rule.triggerParams['interval'] as num?)?.toDouble() ?? 1.0;
+      _timerElapsed[rule.id] = (_timerElapsed[rule.id] ?? 0.0) + dt;
+      if (_timerElapsed[rule.id]! >= interval) {
+        _timerElapsed[rule.id] = _timerElapsed[rule.id]! - interval;
+        _executeActions(rule.actions, ts: ts);
+      }
+    }
+  }
+
+  void _updateFades(double dt) {
+    if (_playerFade != null) {
+      _playerFade!.elapsed += dt;
+      _playerAlpha = _playerFade!.alpha;
+      if (_playerFade!.isDone) {
+        if (_playerAlpha <= 0) _playerHidden = true;
+        _playerFade = null;
+      }
+    }
+    for (final e in _enemies) {
+      if (e.fade != null) {
+        e.fade!.elapsed += dt;
+        e.alpha = e.fade!.alpha;
+        if (e.fade!.isDone) {
+          if (e.alpha <= 0) e.hidden = true;
+          e.fade = null;
+        }
+      }
+    }
+    for (final id in _objectFades.keys.toList()) {
+      final f = _objectFades[id]!;
+      f.elapsed += dt;
+      _objectAlpha[id] = f.alpha;
+      if (f.isDone) {
+        if (f.alpha <= 0) {
+          _hiddenObjectIds.add(id);
+          // Remove faded-out collectibles from the map so they don't respawn on stop/play
+          mapData.objects.removeWhere((o) =>
+              o.id == id && (o.type == GameObjectType.coin || o.type == GameObjectType.chest));
+        }
+        _objectFades.remove(id);
+      }
+    }
   }
 
   void _tickCooldowns(double dt) {
@@ -267,6 +462,7 @@ class PlaySession {
   void _fireKey(TriggerType trigger, double dt, {double dirX = 0, double dirY = 0}) {
     final ts = mapData.tileSize.toDouble();
     for (final rule in rules.where((r) => r.enabled && r.trigger == trigger)) {
+      if (!_evalConditions(rule)) continue;
       _executeActions(rule.actions, dt: dt, dirX: dirX, dirY: dirY, ts: ts);
     }
   }
@@ -286,11 +482,14 @@ class PlaySession {
     final toRemove = <GameObject>[];
     for (final obj in List.of(mapData.objects)) {
       if (obj.tileX != px || obj.tileY != py) continue;
+      if (_hiddenObjectIds.contains(obj.id)) continue;
       switch (obj.type) {
         case GameObjectType.coin:
         case GameObjectType.chest:
-          toRemove.add(obj);
           _fire(TriggerType.playerTouchesCollectible, triggerObj: obj, cooldownKey: obj.id);
+          // Only auto-remove if no fade animation was started by the rule.
+          // If a fade was started, _updateFades will hide/remove it when done.
+          if (!_objectFades.containsKey(obj.id)) toRemove.add(obj);
         case GameObjectType.door:
           _fire(TriggerType.playerTouchesDoor, triggerObj: obj, cooldownKey: 'door_${obj.id}');
         case GameObjectType.npc:
@@ -306,8 +505,9 @@ class PlaySession {
     }
 
     for (final e in _enemies) {
+      if (e.hidden) continue;
       if ((e.pos - _playerPos).length < ts * 0.55) {
-        _fire(TriggerType.playerTouchesEnemy, cooldownKey: 'enemy_${e.source.id}');
+        _fire(TriggerType.playerTouchesEnemy, triggerObj: e.source, cooldownKey: 'enemy_${e.source.id}');
       }
     }
   }
@@ -315,6 +515,7 @@ class PlaySession {
   void _checkProximityRules() {
     final ts = mapData.tileSize.toDouble();
     for (final rule in rules.where((r) => r.enabled && r.trigger == TriggerType.enemyNearPlayer)) {
+      if (!_evalConditions(rule)) continue;
       for (final action in rule.actions) {
         switch (action.type) {
           case ActionType.enemyChasePlayer:
@@ -343,10 +544,81 @@ class PlaySession {
 
     bool anyFired = false;
     for (final rule in rules.where((r) => r.enabled && r.trigger == trigger)) {
+      if (!_evalConditions(rule)) continue;
       _executeActions(rule.actions, triggerObj: triggerObj);
       anyFired = true;
     }
     if (anyFired) _cooldowns[key] = _hitCooldown;
+  }
+
+  /// Evaluates secondary conditions (index 1+) with AND/OR/NOT logic.
+  bool _evalConditions(GameRule rule) {
+    if (rule.conditions.length <= 1) return true;
+    bool result = true; // primary condition already matched
+    for (int i = 1; i < rule.conditions.length; i++) {
+      final cond = rule.conditions[i];
+      final op = rule.operators[i - 1];
+      bool val = _checkConditionState(cond.trigger);
+      if (cond.negate) val = !val;
+      result = op == ConditionOp.and ? result && val : result || val;
+    }
+    return result;
+  }
+
+  /// Checks current game state for a given trigger type (used for secondary conditions).
+  bool _checkConditionState(TriggerType t) {
+    final ts = mapData.tileSize.toDouble();
+    final keys = HardwareKeyboard.instance.logicalKeysPressed;
+    return switch (t) {
+      TriggerType.keyUpPressed =>
+        keys.contains(LogicalKeyboardKey.arrowUp) || keys.contains(LogicalKeyboardKey.keyW),
+      TriggerType.keyDownPressed =>
+        keys.contains(LogicalKeyboardKey.arrowDown) || keys.contains(LogicalKeyboardKey.keyS),
+      TriggerType.keyLeftPressed =>
+        keys.contains(LogicalKeyboardKey.arrowLeft) || keys.contains(LogicalKeyboardKey.keyA),
+      TriggerType.keyRightPressed =>
+        keys.contains(LogicalKeyboardKey.arrowRight) || keys.contains(LogicalKeyboardKey.keyD),
+      TriggerType.keySpacePressed =>
+        keys.contains(LogicalKeyboardKey.space),
+      TriggerType.playerHealthZero => _health <= 0,
+      TriggerType.enemyNearPlayer =>
+        _enemies.any((e) => !e.hidden && (e.pos - _playerPos).length < ts * 5),
+      TriggerType.playerTouchesEnemy =>
+        _enemies.any((e) => !e.hidden && (e.pos - _playerPos).length < ts * 0.55),
+      TriggerType.playerTouchesCollectible => mapData.objects.any((o) =>
+        !_hiddenObjectIds.contains(o.id) &&
+        (o.type == GameObjectType.coin || o.type == GameObjectType.chest) &&
+        o.tileX == (_playerPos.x / ts).floor() && o.tileY == (_playerPos.y / ts).floor()),
+      TriggerType.playerTouchesDoor => mapData.objects.any((o) =>
+        !_hiddenObjectIds.contains(o.id) &&
+        o.type == GameObjectType.door &&
+        o.tileX == (_playerPos.x / ts).floor() && o.tileY == (_playerPos.y / ts).floor()),
+      TriggerType.playerTouchesNpc => mapData.objects.any((o) =>
+        !_hiddenObjectIds.contains(o.id) &&
+        o.type == GameObjectType.npc &&
+        o.tileX == (_playerPos.x / ts).floor() && o.tileY == (_playerPos.y / ts).floor()),
+      TriggerType.gameStart => true,
+      TriggerType.onTimer => false,
+    };
+  }
+
+  GameObject? _findNamedObject(String name) {
+    for (final obj in mapData.objects) {
+      if (obj.name == name) return obj;
+    }
+    return null;
+  }
+
+  List<GameObject> _findTaggedObjects(String tag) {
+    if (tag.isEmpty) return [];
+    return mapData.objects.where((o) => o.tag == tag).toList();
+  }
+
+  _Enemy? _enemyFor(GameObject obj) {
+    for (final e in _enemies) {
+      if (e.source.id == obj.id) return e;
+    }
+    return null;
   }
 
   void _executeActions(List<RuleAction> actions,
@@ -381,6 +653,221 @@ class PlaySession {
           onGameEvent('playSfx:${a.params['sfxName'] ?? ''}');
         case ActionType.stopMusic:
           onGameEvent('stopMusic');
+        case ActionType.setScale:
+          final target = a.params['target'] as String? ?? 'player';
+          final val = double.tryParse(a.params['value']?.toString() ?? '') ?? 1.0;
+          if (target == 'player') {
+            _playerScale = val;
+          } else if (target == 'trigger' && triggerObj != null) {
+            triggerObj.scale = val;
+          } else if (target == 'named') {
+            _findNamedObject(a.params['objectName'] as String? ?? '')?.scale = val;
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) obj.scale = val;
+          } else if (target == 'enemies') {
+            for (final e in _enemies) e.source.scale = val;
+          }
+        case ActionType.setRotation:
+          final target = a.params['target'] as String? ?? 'player';
+          final angle = ((a.params['angle'] as int?) ?? 0).toDouble();
+          if (target == 'player') {
+            _playerRotation = angle;
+          } else if (target == 'trigger' && triggerObj != null) {
+            triggerObj.rotation = angle;
+          } else if (target == 'named') {
+            _findNamedObject(a.params['objectName'] as String? ?? '')?.rotation = angle;
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) obj.rotation = angle;
+          } else if (target == 'enemies') {
+            for (final e in _enemies) e.source.rotation = angle;
+          }
+        case ActionType.adjustRotation:
+          final target = a.params['target'] as String? ?? 'player';
+          final delta = ((a.params['angle'] as int?) ?? 0).toDouble();
+          if (target == 'player') {
+            _playerRotation = (_playerRotation + delta) % 360;
+          } else if (target == 'trigger' && triggerObj != null) {
+            triggerObj.rotation = (triggerObj.rotation + delta) % 360;
+          } else if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) obj.rotation = (obj.rotation + delta) % 360;
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+              obj.rotation = (obj.rotation + delta) % 360;
+            }
+          } else if (target == 'enemies') {
+            for (final e in _enemies) e.source.rotation = (e.source.rotation + delta) % 360;
+          }
+        case ActionType.flipH:
+          final target = a.params['target'] as String? ?? 'player';
+          if (target == 'player') {
+            _playerFlipH = !_playerFlipH;
+          } else if (target == 'trigger' && triggerObj != null) {
+            triggerObj.flipH = !triggerObj.flipH;
+          } else if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) obj.flipH = !obj.flipH;
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) obj.flipH = !obj.flipH;
+          } else if (target == 'enemies') {
+            for (final e in _enemies) e.source.flipH = !e.source.flipH;
+          }
+        case ActionType.flipV:
+          final target = a.params['target'] as String? ?? 'player';
+          if (target == 'player') {
+            _playerFlipV = !_playerFlipV;
+          } else if (target == 'trigger' && triggerObj != null) {
+            triggerObj.flipV = !triggerObj.flipV;
+          } else if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) obj.flipV = !obj.flipV;
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) obj.flipV = !obj.flipV;
+          } else if (target == 'enemies') {
+            for (final e in _enemies) e.source.flipV = !e.source.flipV;
+          }
+        case ActionType.hideObject:
+          final target = a.params['target'] as String? ?? 'trigger';
+          if (target == 'player') {
+            _playerHidden = true;
+          } else if (target == 'trigger' && triggerObj != null) {
+            final enemy = _enemyFor(triggerObj);
+            if (enemy != null) { enemy.hidden = true; } else { _hiddenObjectIds.add(triggerObj.id); }
+          } else if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) _hiddenObjectIds.add(obj.id);
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+              final enemy = _enemyFor(obj);
+              if (enemy != null) { enemy.hidden = true; } else { _hiddenObjectIds.add(obj.id); }
+            }
+          } else if (target == 'enemies') {
+            for (final e in _enemies) e.hidden = true;
+          }
+        case ActionType.showObject:
+          final target = a.params['target'] as String? ?? 'trigger';
+          if (target == 'player') {
+            _playerHidden = false;
+          } else if (target == 'trigger' && triggerObj != null) {
+            final enemy = _enemyFor(triggerObj);
+            if (enemy != null) { enemy.hidden = false; } else { _hiddenObjectIds.remove(triggerObj.id); }
+          } else if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) _hiddenObjectIds.remove(obj.id);
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+              final enemy = _enemyFor(obj);
+              if (enemy != null) { enemy.hidden = false; } else { _hiddenObjectIds.remove(obj.id); }
+            }
+          } else if (target == 'enemies') {
+            for (final e in _enemies) e.hidden = false;
+          }
+        case ActionType.fadeIn:
+          final target = a.params['target'] as String? ?? 'trigger';
+          final dur = double.tryParse(a.params['duration']?.toString() ?? '') ?? 1.0;
+          if (target == 'player') {
+            _playerHidden = false;
+            _playerFade = _FadeAnim(_playerAlpha, 1.0, dur);
+          } else if (target == 'trigger' && triggerObj != null) {
+            final enemy = _enemyFor(triggerObj);
+            if (enemy != null) {
+              enemy.hidden = false;
+              enemy.fade = _FadeAnim(enemy.alpha, 1.0, dur);
+            } else {
+              _hiddenObjectIds.remove(triggerObj.id);
+              _objectFades[triggerObj.id] = _FadeAnim(_objectAlpha[triggerObj.id] ?? 0.0, 1.0, dur);
+            }
+          } else if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) {
+              _hiddenObjectIds.remove(obj.id);
+              _objectFades[obj.id] = _FadeAnim(_objectAlpha[obj.id] ?? 0.0, 1.0, dur);
+            }
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+              final enemy = _enemyFor(obj);
+              if (enemy != null) {
+                enemy.hidden = false;
+                enemy.fade = _FadeAnim(enemy.alpha, 1.0, dur);
+              } else {
+                _hiddenObjectIds.remove(obj.id);
+                _objectFades[obj.id] = _FadeAnim(_objectAlpha[obj.id] ?? 0.0, 1.0, dur);
+              }
+            }
+          } else if (target == 'enemies') {
+            for (final e in _enemies) {
+              e.hidden = false;
+              e.fade = _FadeAnim(e.alpha, 1.0, dur);
+            }
+          }
+        case ActionType.fadeOut:
+          final target = a.params['target'] as String? ?? 'trigger';
+          final dur = double.tryParse(a.params['duration']?.toString() ?? '') ?? 1.0;
+          if (target == 'player') {
+            _playerFade = _FadeAnim(_playerAlpha, 0.0, dur);
+          } else if (target == 'trigger' && triggerObj != null) {
+            final enemy = _enemyFor(triggerObj);
+            if (enemy != null) {
+              enemy.fade = _FadeAnim(enemy.alpha, 0.0, dur);
+            } else {
+              _objectFades[triggerObj.id] = _FadeAnim(_objectAlpha[triggerObj.id] ?? 1.0, 0.0, dur);
+            }
+          } else if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) {
+              _objectFades[obj.id] = _FadeAnim(_objectAlpha[obj.id] ?? 1.0, 0.0, dur);
+            }
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+              final enemy = _enemyFor(obj);
+              if (enemy != null) {
+                enemy.fade = _FadeAnim(enemy.alpha, 0.0, dur);
+              } else {
+                _objectFades[obj.id] = _FadeAnim(_objectAlpha[obj.id] ?? 1.0, 0.0, dur);
+              }
+            }
+          } else if (target == 'enemies') {
+            for (final e in _enemies) e.fade = _FadeAnim(e.alpha, 0.0, dur);
+          }
+        case ActionType.setAlpha:
+          final target = a.params['target'] as String? ?? 'player';
+          final val = double.tryParse(a.params['value']?.toString() ?? '') ?? 1.0;
+          final clamped = val.clamp(0.0, 1.0);
+          if (target == 'player') {
+            _playerAlpha = clamped;
+            _playerFade = null;
+          } else if (target == 'trigger' && triggerObj != null) {
+            final enemy = _enemyFor(triggerObj);
+            if (enemy != null) {
+              enemy.alpha = clamped;
+              enemy.fade = null;
+            } else {
+              _objectAlpha[triggerObj.id] = clamped;
+              _objectFades.remove(triggerObj.id);
+            }
+          } else if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) {
+              _objectAlpha[obj.id] = clamped;
+              _objectFades.remove(obj.id);
+            }
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+              final enemy = _enemyFor(obj);
+              if (enemy != null) {
+                enemy.alpha = clamped;
+                enemy.fade = null;
+              } else {
+                _objectAlpha[obj.id] = clamped;
+                _objectFades.remove(obj.id);
+              }
+            }
+          } else if (target == 'enemies') {
+            for (final e in _enemies) {
+              e.alpha = clamped;
+              e.fade = null;
+            }
+          }
         default:
           break;
       }
@@ -393,30 +880,59 @@ class PlaySession {
 
     for (final obj in mapData.objects) {
       if (obj.type == GameObjectType.playerSpawn || obj.type == GameObjectType.enemy) continue;
-      _drawObject(canvas, Offset((obj.tileX + 0.5) * ts, (obj.tileY + 0.5) * ts),
-          ts, r, obj.type);
+      if (_hiddenObjectIds.contains(obj.id)) continue;
+      final alpha = _objectAlpha[obj.id] ?? 1.0;
+      final floatY = obj.floatEnabled
+          ? obj.floatAmplitude * sin(2 * pi * obj.floatSpeed * _elapsedSec)
+          : 0.0;
+      final (fxDx, fxDy) = _fxOffset(obj, ts);
+      _drawObject(
+          canvas,
+          Offset((obj.tileX + 0.5) * ts + fxDx, (obj.tileY + 0.5) * ts + floatY + fxDy),
+          ts, r, obj.type,
+          flipH: obj.flipH, flipV: obj.flipV,
+          scale: obj.scale, rotation: obj.rotation, alpha: alpha);
     }
 
     for (final e in _enemies) {
-      _drawObject(canvas, Offset(e.pos.x, e.pos.y), ts, r, e.source.type);
+      if (e.hidden) continue;
+      final floatY = e.source.floatEnabled
+          ? e.source.floatAmplitude * sin(2 * pi * e.source.floatSpeed * _elapsedSec)
+          : 0.0;
+      final (fxDx, fxDy) = _fxOffset(e.source, ts);
+      _drawObject(canvas, Offset(e.pos.x + fxDx, e.pos.y + floatY + fxDy), ts, r, e.source.type,
+          flipH: e.source.flipH, flipV: e.source.flipV,
+          scale: e.source.scale, rotation: e.source.rotation, alpha: e.alpha);
     }
 
     // Player
-    final playerSprite = _resolveSprite(GameObjectType.playerSpawn);
-    if (playerSprite != null) {
-      _drawSprite(canvas, playerSprite, _playerPos.x, _playerPos.y, ts);
-    } else {
-      _drawCircle(canvas, Offset(_playerPos.x, _playerPos.y), r,
-          const Color(0xFF4ADE80), 'P');
+    if (!_playerHidden) {
+      final spawn = mapData.objects.where((o) => o.type == GameObjectType.playerSpawn).firstOrNull;
+      final playerFloatY = (spawn != null && spawn.floatEnabled)
+          ? spawn.floatAmplitude * sin(2 * pi * spawn.floatSpeed * _elapsedSec)
+          : 0.0;
+      final playerDrawY = _playerPos.y + playerFloatY;
+      final playerSprite = _resolveSprite(GameObjectType.playerSpawn);
+      if (playerSprite != null) {
+        _drawSprite(canvas, playerSprite, _playerPos.x, playerDrawY, ts,
+            flipH: _playerFlipH, flipV: _playerFlipV,
+            scale: _playerScale, rotation: _playerRotation, alpha: _playerAlpha);
+      } else {
+        _drawCircle(canvas, Offset(_playerPos.x, playerDrawY), r,
+            const Color(0xFF4ADE80), 'P', alpha: _playerAlpha);
+      }
     }
   }
 
-  void _drawObject(Canvas canvas, Offset center, double ts, double r, GameObjectType type) {
+  void _drawObject(Canvas canvas, Offset center, double ts, double r, GameObjectType type,
+      {bool flipH = false, bool flipV = false,
+      double scale = 1.0, double rotation = 0.0, double alpha = 1.0}) {
     final sprite = _resolveSprite(type);
     if (sprite != null) {
-      _drawSprite(canvas, sprite, center.dx, center.dy, ts);
+      _drawSprite(canvas, sprite, center.dx, center.dy, ts,
+          flipH: flipH, flipV: flipV, scale: scale, rotation: rotation, alpha: alpha);
     } else {
-      _drawCircle(canvas, center, r, type.color, type.symbol);
+      _drawCircle(canvas, center, r, type.color, type.symbol, alpha: alpha);
     }
   }
 
@@ -436,21 +952,32 @@ class PlaySession {
     return spriteCache.getImage(type);
   }
 
-  void _drawSprite(Canvas canvas, ui.Image image, double cx, double cy, double ts) {
+  void _drawSprite(Canvas canvas, ui.Image image, double cx, double cy, double ts,
+      {bool flipH = false, bool flipV = false,
+      double scale = 1.0, double rotation = 0.0, double alpha = 1.0}) {
     final src = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
-    final dst = Rect.fromCenter(center: Offset(cx, cy), width: ts, height: ts);
-    canvas.drawImageRect(image, src, dst, Paint());
+    canvas.save();
+    canvas.translate(cx, cy);
+    if (rotation != 0.0) canvas.rotate(rotation * pi / 180.0);
+    canvas.scale(flipH ? -scale : scale, flipV ? -scale : scale);
+    canvas.drawImageRect(
+      image, src,
+      Rect.fromCenter(center: Offset.zero, width: ts, height: ts),
+      Paint()..color = Color.fromARGB((alpha * 255).round().clamp(0, 255), 255, 255, 255),
+    );
+    canvas.restore();
   }
 
-  void _drawCircle(Canvas canvas, Offset center, double r, Color color, String symbol) {
+  void _drawCircle(Canvas canvas, Offset center, double r, Color color, String symbol,
+      {double alpha = 1.0}) {
     canvas.drawCircle(center + const Offset(1, 2), r,
-        Paint()..color = const Color(0x4D000000));
-    canvas.drawCircle(center, r, Paint()..color = color);
+        Paint()..color = Color(0x4D000000).withOpacity(0.3 * alpha));
+    canvas.drawCircle(center, r, Paint()..color = color.withOpacity(alpha));
     final tp = TextPainter(
       text: TextSpan(
         text: symbol,
         style: TextStyle(
-          color: const Color(0xFFFFFFFF),
+          color: Color.fromARGB((alpha * 255).round().clamp(0, 255), 255, 255, 255),
           fontSize: r * 0.9,
           fontWeight: FontWeight.bold,
         ),

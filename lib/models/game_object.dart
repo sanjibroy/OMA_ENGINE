@@ -55,6 +55,26 @@ class GameObject {
   int tileX;
   int tileY;
   String name;
+  bool flipH;
+  bool flipV;
+  double scale;
+  double rotation; // degrees 0–360
+  bool hidden;
+  double alpha; // initial opacity 0.0–1.0
+  String tag;
+  bool floatEnabled;
+  double floatAmplitude; // pixels up/down
+  double floatSpeed;     // cycles per second
+  bool projectileEnabled;
+  double projectileAngle;  // degrees (0=right, 90=down)
+  double projectileSpeed;  // tiles/sec
+  double projectileRange;  // tiles (loop distance)
+  double projectileArc;    // tiles (peak height above path, 0=linear)
+  bool dashEnabled;
+  double dashAngle;        // degrees
+  double dashDistance;     // tiles
+  double dashSpeed;        // tiles/sec
+  double dashInterval;     // seconds between dashes
   Map<String, dynamic> properties;
 
   GameObject({
@@ -63,6 +83,26 @@ class GameObject {
     required this.tileY,
     String? name,
     String? id,
+    this.flipH = false,
+    this.flipV = false,
+    this.scale = 1.0,
+    this.rotation = 0.0,
+    this.hidden = false,
+    this.alpha = 1.0,
+    this.tag = '',
+    this.floatEnabled = false,
+    this.floatAmplitude = 4.0,
+    this.floatSpeed = 1.0,
+    this.projectileEnabled = false,
+    this.projectileAngle = 0.0,
+    this.projectileSpeed = 3.0,
+    this.projectileRange = 5.0,
+    this.projectileArc = 0.0,
+    this.dashEnabled = false,
+    this.dashAngle = 0.0,
+    this.dashDistance = 2.0,
+    this.dashSpeed = 8.0,
+    this.dashInterval = 2.0,
     Map<String, dynamic>? properties,
   })  : id = id ?? '${type.name}_${tileX}_${tileY}_${DateTime.now().microsecondsSinceEpoch}',
         name = name ?? type.label,
@@ -93,6 +133,26 @@ class GameObject {
         'tileX': tileX,
         'tileY': tileY,
         'name': name,
+        'flipH': flipH,
+        'flipV': flipV,
+        'scale': scale,
+        'rotation': rotation,
+        'hidden': hidden,
+        'alpha': alpha,
+        'tag': tag,
+        'floatEnabled': floatEnabled,
+        'floatAmplitude': floatAmplitude,
+        'floatSpeed': floatSpeed,
+        'projectileEnabled': projectileEnabled,
+        'projectileAngle': projectileAngle,
+        'projectileSpeed': projectileSpeed,
+        'projectileRange': projectileRange,
+        'projectileArc': projectileArc,
+        'dashEnabled': dashEnabled,
+        'dashAngle': dashAngle,
+        'dashDistance': dashDistance,
+        'dashSpeed': dashSpeed,
+        'dashInterval': dashInterval,
         'properties': properties,
       };
 
@@ -108,6 +168,26 @@ class GameObject {
       tileX: json['tileX'] as int,
       tileY: json['tileY'] as int,
       name: json['name'] as String,
+      flipH: json['flipH'] as bool? ?? false,
+      flipV: json['flipV'] as bool? ?? false,
+      scale: (json['scale'] as num?)?.toDouble() ?? 1.0,
+      rotation: (json['rotation'] as num?)?.toDouble() ?? 0.0,
+      hidden: json['hidden'] as bool? ?? false,
+      alpha: (json['alpha'] as num?)?.toDouble() ?? 1.0,
+      tag: json['tag'] as String? ?? '',
+      floatEnabled: json['floatEnabled'] as bool? ?? false,
+      floatAmplitude: (json['floatAmplitude'] as num?)?.toDouble() ?? 4.0,
+      floatSpeed: (json['floatSpeed'] as num?)?.toDouble() ?? 1.0,
+      projectileEnabled: json['projectileEnabled'] as bool? ?? false,
+      projectileAngle: (json['projectileAngle'] as num?)?.toDouble() ?? 0.0,
+      projectileSpeed: (json['projectileSpeed'] as num?)?.toDouble() ?? 3.0,
+      projectileRange: (json['projectileRange'] as num?)?.toDouble() ?? 5.0,
+      projectileArc: (json['projectileArc'] as num?)?.toDouble() ?? 0.0,
+      dashEnabled: json['dashEnabled'] as bool? ?? false,
+      dashAngle: (json['dashAngle'] as num?)?.toDouble() ?? 0.0,
+      dashDistance: (json['dashDistance'] as num?)?.toDouble() ?? 2.0,
+      dashSpeed: (json['dashSpeed'] as num?)?.toDouble() ?? 8.0,
+      dashInterval: (json['dashInterval'] as num?)?.toDouble() ?? 2.0,
       properties: merged,
     );
   }

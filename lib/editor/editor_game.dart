@@ -1,3 +1,4 @@
+import 'dart:math' show max;
 import 'package:flame/camera.dart';
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
@@ -34,10 +35,13 @@ class EditorGame extends FlameGame with ScrollDetector {
   void Function(String msg)? onMessage;
   void Function(String event)? onGameEvent;
 
+  bool allowGameZoom = false; // set from project.allowZoom before startPlay
+  double gameMaxZoom = 2.0;  // set from project.maxZoom before startPlay
+
   EditorGame({required this.mapData, required this.spriteCache});
 
   @override
-  Color backgroundColor() => const Color(0xFF0F0F13);
+  Color backgroundColor() => const Color(0xFF1E1E1E);
 
   @override
   Future<void> onLoad() async {
@@ -81,6 +85,27 @@ class EditorGame extends FlameGame with ScrollDetector {
               tileX: o.tileX,
               tileY: o.tileY,
               name: o.name,
+              flipH: o.flipH,
+              flipV: o.flipV,
+              scale: o.scale,
+              rotation: o.rotation,
+              hidden: o.hidden,
+              alpha: o.alpha,
+              tag: o.tag,
+              floatEnabled: o.floatEnabled,
+              floatAmplitude: o.floatAmplitude,
+              floatSpeed: o.floatSpeed,
+              projectileEnabled: o.projectileEnabled,
+              projectileAngle: o.projectileAngle,
+              projectileSpeed: o.projectileSpeed,
+              projectileRange: o.projectileRange,
+              projectileArc: o.projectileArc,
+              dashEnabled: o.dashEnabled,
+              dashAngle: o.dashAngle,
+              dashDistance: o.dashDistance,
+              dashSpeed: o.dashSpeed,
+              dashInterval: o.dashInterval,
+              properties: Map<String, dynamic>.from(o.properties),
             ))
         .toList();
 
@@ -93,12 +118,20 @@ class EditorGame extends FlameGame with ScrollDetector {
     _savedZoom = _camera!.viewfinder.zoom;
     _savedViewport = _camera!.viewport;
 
+    final ts = mapData.tileSize.toDouble();
+    final mapW = mapData.width * ts;
+    final mapH = mapData.height * ts;
     if (_vpW > 0 && _vpH > 0) {
       _camera!.viewport = FixedResolutionViewport(
           resolution: Vector2(_vpW.toDouble(), _vpH.toDouble()));
-      _camera!.viewfinder.zoom = 1.0;
+      final minZ = max(_vpW.toDouble() / mapW, _vpH.toDouble() / mapH);
+      final maxZ = max(minZ, gameMaxZoom);
+      _camera!.viewfinder.zoom = 1.0.clamp(minZ, maxZ);
     } else {
-      _camera!.viewfinder.zoom = 2.0;
+      final minZ = max(canvasSize.x / mapW, canvasSize.y / mapH);
+      final maxZ = max(minZ, gameMaxZoom);
+      final adaptive = canvasSize.y / (ts * 10.0);
+      _camera!.viewfinder.zoom = adaptive.clamp(minZ, maxZ);
     }
 
     // Create play session as plain Dart class (no Component lifecycle)
@@ -206,7 +239,23 @@ class EditorGame extends FlameGame with ScrollDetector {
 
   @override
   void onScroll(PointerScrollInfo info) {
-    if (_camera == null || _playSession != null) return; // no zoom in play mode
+    if (_camera == null) return;
+    if (_playSession != null) {
+      // In play mode: only zoom if the project allows it
+      if (!allowGameZoom) return;
+      final ts2 = mapData.tileSize.toDouble();
+      final mapW2 = mapData.width * ts2;
+      final mapH2 = mapData.height * ts2;
+      final vpW = _vpW > 0 ? _vpW.toDouble() : canvasSize.x;
+      final vpH = _vpH > 0 ? _vpH.toDouble() : canvasSize.y;
+      final minZoom = max(vpW / mapW2, vpH / mapH2);
+      final maxZoom = max(minZoom, gameMaxZoom);
+      _camera!.viewfinder.zoom =
+          (_camera!.viewfinder.zoom * (info.scrollDelta.global.y < 0 ? 1.1 : 0.9))
+              .clamp(minZoom, maxZoom);
+      return;
+    }
+    // Editor mode: always allow zoom
     final factor = info.scrollDelta.global.y < 0 ? 1.1 : 0.9;
     _camera!.viewfinder.zoom =
         (_camera!.viewfinder.zoom * factor).clamp(0.15, 8.0);
@@ -269,19 +318,42 @@ class EditorGame extends FlameGame with ScrollDetector {
 
   // ─── Object Placement ───────────────────────────────────────────────────────
 
-  GameObject? placeObject(Offset screenPos, GameObjectType type, EditorState es) {
+  GameObject? placeObject(Offset screenPos, GameObjectType type, EditorState es,
+      {GameObject? inheritFrom}) {
     final tile = screenToTile(screenPos);
     if (tile == null) return null;
 
     es.pushUndo();
 
     if (type.isUnique) {
-      mapData.objects.removeWhere((o) => o.type == type);
+      // Move the existing unique object rather than deleting and recreating —
+      // this preserves its scale, rotation, flip, and custom properties.
+      final existing =
+          mapData.objects.where((o) => o.type == type).firstOrNull;
+      if (existing != null) {
+        mapData.objects.removeWhere(
+            (o) => o != existing && o.tileX == tile.$1 && o.tileY == tile.$2);
+        existing.tileX = tile.$1;
+        existing.tileY = tile.$2;
+        return existing;
+      }
     }
+
     mapData.objects.removeWhere(
         (o) => o.tileX == tile.$1 && o.tileY == tile.$2);
 
-    final obj = GameObject(type: type, tileX: tile.$1, tileY: tile.$2);
+    // Inherit transforms from the previously selected object of the same type
+    // so that placing multiple similar objects feels consistent.
+    final ref = inheritFrom?.type == type ? inheritFrom : null;
+    final obj = GameObject(
+      type: type,
+      tileX: tile.$1,
+      tileY: tile.$2,
+      scale: ref?.scale ?? 1.0,
+      rotation: ref?.rotation ?? 0.0,
+      flipH: ref?.flipH ?? false,
+      flipV: ref?.flipV ?? false,
+    );
     mapData.objects.add(obj);
     return obj;
   }

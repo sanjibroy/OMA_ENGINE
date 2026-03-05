@@ -25,9 +25,73 @@ class _ToolbarState extends State<Toolbar> {
 
   EditorState get _es => widget.editorState;
 
+  // ─── Unsaved changes guard ──────────────────────────────────────────────────
+
+  /// Returns true if it's safe to proceed (either no unsaved changes, or the
+  /// user chose to save/discard). Returns false if they cancelled.
+  Future<bool> _confirmDiscard() async {
+    if (!_es.isDirty.value) return true;
+
+    final choice = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.dialogBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: AppColors.borderColor),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded,
+                color: AppColors.warning, size: 18),
+            SizedBox(width: 8),
+            Text('Unsaved Changes',
+                style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600)),
+          ],
+        ),
+        content: const Text(
+          'You have unsaved changes. What would you like to do?',
+          style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'cancel'),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'discard'),
+            child: const Text('Discard',
+                style: TextStyle(color: AppColors.error)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'save'),
+            child: const Text('Save',
+                style: TextStyle(
+                    color: AppColors.accent, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+
+    if (choice == null || choice == 'cancel') return false;
+    if (choice == 'save') {
+      await _onSave();
+      // If still dirty after save attempt (e.g. user cancelled picker), abort
+      if (_es.isDirty.value) return false;
+    }
+    return true;
+  }
+
   // ─── New Project ────────────────────────────────────────────────────────────
 
   Future<void> _onNew() async {
+    if (!await _confirmDiscard()) return;
+
     final config = await NewMapDialog.show(context);
     if (config == null) return;
 
@@ -53,6 +117,7 @@ class _ToolbarState extends State<Toolbar> {
     _es.projectDir = null;
     _es.notifyMapChanged();
     _es.notifyProjectChanged();
+    _es.markClean();
   }
 
   Future<void> _renameProject() async {
@@ -60,7 +125,7 @@ class _ToolbarState extends State<Toolbar> {
     final newName = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF201E1C),
+        backgroundColor: AppColors.dialogBg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
           side: const BorderSide(color: AppColors.borderColor),
@@ -131,6 +196,7 @@ class _ToolbarState extends State<Toolbar> {
 
     if (!mounted) return;
     setState(() => _isSaving = false);
+    _es.markClean();
     _showSnack('Project saved.');
   }
 
@@ -138,6 +204,7 @@ class _ToolbarState extends State<Toolbar> {
 
   Future<void> _onOpen() async {
     if (_isLoading) return;
+    if (!await _confirmDiscard()) return;
     setState(() => _isLoading = true);
 
     final OpenProjectResult? result = await ProjectService.openProject();
@@ -163,7 +230,7 @@ class _ToolbarState extends State<Toolbar> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF201E1C),
+        backgroundColor: AppColors.dialogBg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
           side: const BorderSide(color: AppColors.borderColor),
@@ -218,7 +285,7 @@ class _ToolbarState extends State<Toolbar> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF201E1C),
+        backgroundColor: AppColors.dialogBg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
           side: const BorderSide(color: AppColors.borderColor),
@@ -330,35 +397,52 @@ class _ToolbarState extends State<Toolbar> {
           _divider(),
           const SizedBox(width: 16),
 
-          // Project > Map name
+          // Project > Map name + dirty indicator
           ValueListenableBuilder<int>(
             valueListenable: widget.editorState.projectChanged,
-            builder: (_, __, ___) => Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Tooltip(
-                  message: 'Click to rename project',
-                  child: GestureDetector(
-                    onTap: _renameProject,
-                    child: Text(
-                      widget.editorState.project.name,
-                      style: const TextStyle(
-                          color: AppColors.textMuted, fontSize: 12),
+            builder: (_, __, ___) => ValueListenableBuilder<bool>(
+              valueListenable: widget.editorState.isDirty,
+              builder: (_, dirty, __) => Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Tooltip(
+                    message: 'Click to rename project',
+                    child: GestureDetector(
+                      onTap: _renameProject,
+                      child: Text(
+                        widget.editorState.project.name,
+                        style: const TextStyle(
+                            color: AppColors.textMuted, fontSize: 12),
+                      ),
                     ),
                   ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 5),
-                  child: Icon(Icons.chevron_right,
-                      size: 12, color: AppColors.textMuted),
-                ),
-                Text(
-                  widget.editorState.currentMapMeta?.name ??
-                      widget.editorState.mapData.name,
-                  style: const TextStyle(
-                      color: AppColors.textSecondary, fontSize: 12),
-                ),
-              ],
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 5),
+                    child: Icon(Icons.chevron_right,
+                        size: 12, color: AppColors.textMuted),
+                  ),
+                  Text(
+                    widget.editorState.currentMapMeta?.name ??
+                        widget.editorState.mapData.name,
+                    style: const TextStyle(
+                        color: AppColors.textSecondary, fontSize: 12),
+                  ),
+                  if (dirty) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: 'Unsaved changes',
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        decoration: const BoxDecoration(
+                          color: AppColors.warning,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
 

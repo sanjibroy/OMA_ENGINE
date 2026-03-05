@@ -1,25 +1,25 @@
 import 'package:flutter/material.dart';
 
 class AppColors {
-  // Backgrounds
-  static const background = Color(0xFF0F0F13);
-  static const panelBg = Color(0xFF16161D);
-  static const surfaceBg = Color(0xFF1E1E28);
-  static const borderColor = Color(0xFF2A2A35);
+  // Backgrounds — neutral dark, VSCode-style
+  static const background = Color(0xFF1E1E1E);
+  static const panelBg = Color(0xFF252526);
+  static const surfaceBg = Color(0xFF2D2D30);
+  static const borderColor = Color(0xFF3E3E42);
 
-  // Dialog — warm charcoal, no color cast, easy on the eyes
-  static const dialogBg = Color(0xFF201E1C);
-  static const dialogSurface = Color(0xFF2A2826);
-  static const dialogBorder = Color(0xFF3D3A38);
+  // Dialog
+  static const dialogBg = Color(0xFF252526);
+  static const dialogSurface = Color(0xFF2D2D30);
+  static const dialogBorder = Color(0xFF3E3E42);
 
-  // Accent
-  static const accent = Color(0xFF7C6FF7);
-  static const accentHover = Color(0xFF9D98FA);
+  // Accent — VSCode blue
+  static const accent = Color(0xFF3573A5);
+  static const accentHover = Color(0xFF4A8BBF);
 
   // Text
-  static const textPrimary = Color(0xFFE2E2E8);
-  static const textSecondary = Color(0xFF888899);
-  static const textMuted = Color(0xFF4A4A5A);
+  static const textPrimary = Color(0xFFD4D4D4);
+  static const textSecondary = Color(0xFF9E9E9E);
+  static const textMuted = Color(0xFF6A6A6A);
 
   // Status
   static const success = Color(0xFF4ADE80);
@@ -27,8 +27,8 @@ class AppColors {
   static const error = Color(0xFFF87171);
 
   // Tile palette highlight
-  static const tileSelected = Color(0xFF7C6FF7);
-  static const tileHover = Color(0xFF2A2A3A);
+  static const tileSelected = Color(0xFF3573A5);
+  static const tileHover = Color(0xFF2A2D2E);
 }
 
 class AppTheme {
@@ -64,6 +64,15 @@ class AppTheme {
         ),
         scrollbarTheme: ScrollbarThemeData(
           thumbColor: MaterialStateProperty.all(AppColors.borderColor),
+        ),
+        dialogTheme: const DialogTheme(
+          backgroundColor: AppColors.panelBg,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(8)),
+            side: BorderSide(color: AppColors.borderColor),
+          ),
         ),
       );
 }

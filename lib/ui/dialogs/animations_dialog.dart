@@ -144,7 +144,7 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
     final defaultName = _cache.defaultAnim(_type);
 
     return Dialog(
-      backgroundColor: const Color(0xFF201E1C),
+      backgroundColor: AppColors.dialogBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: const BorderSide(color: AppColors.borderColor),
@@ -676,7 +676,7 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
     return showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF201E1C),
+        backgroundColor: AppColors.dialogBg,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
           side: const BorderSide(color: AppColors.borderColor),
@@ -727,7 +727,7 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
       showDialog<bool>(
         context: context,
         builder: (_) => AlertDialog(
-          backgroundColor: const Color(0xFF201E1C),
+          backgroundColor: AppColors.dialogBg,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10),
             side: const BorderSide(color: AppColors.borderColor),

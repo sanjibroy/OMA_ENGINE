@@ -104,7 +104,7 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF201E1C),
+      backgroundColor: AppColors.dialogBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: const BorderSide(color: AppColors.borderColor),
@@ -176,6 +176,26 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
                     style: const TextStyle(
                         color: AppColors.textMuted, fontSize: 11),
                   ),
+
+                  const SizedBox(height: 24),
+
+                  // ── Game Options ─────────────────────────────────────────
+                  _sectionLabel('GAME OPTIONS'),
+                  const SizedBox(height: 10),
+                  _buildToggleRow(
+                    label: 'Allow player to zoom',
+                    description: 'Scroll wheel zooms in/out during gameplay',
+                    value: _proj.allowZoom,
+                    onChanged: (v) {
+                      setState(() => _proj.allowZoom = v);
+                      widget.onChanged();
+                    },
+                  ),
+
+                  if (_proj.allowZoom) ...[
+                    const SizedBox(height: 14),
+                    _buildZoomSlider(),
+                  ],
 
                   const SizedBox(height: 24),
 
@@ -258,7 +278,7 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
           child: DropdownButton<_VpPreset>(
             value: _selected,
             isExpanded: true,
-            dropdownColor: const Color(0xFF201E1C),
+            dropdownColor: AppColors.dialogBg,
             style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
             items: _kPresets
                 .map((p) => DropdownMenuItem(
@@ -324,6 +344,115 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
           child: const Text('Apply',
               style: TextStyle(color: AppColors.accent, fontSize: 12)),
         ),
+      );
+
+  Widget _buildZoomSlider() => Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Max zoom level',
+                    style: TextStyle(
+                        color: AppColors.textPrimary, fontSize: 12)),
+                const SizedBox(height: 2),
+                const Text('How far the player can zoom in',
+                    style: TextStyle(
+                        color: AppColors.textMuted, fontSize: 11)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 120,
+            child: SliderTheme(
+              data: SliderThemeData(
+                trackHeight: 2,
+                thumbShape:
+                    const RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape:
+                    const RoundSliderOverlayShape(overlayRadius: 12),
+                activeTrackColor: AppColors.accent,
+                inactiveTrackColor: AppColors.borderColor,
+                thumbColor: AppColors.accent,
+                overlayColor: AppColors.accent.withOpacity(0.2),
+              ),
+              child: Slider(
+                value: _proj.maxZoom.clamp(1.2, 4.0),
+                min: 1.2,
+                max: 4.0,
+                divisions: 14,
+                onChanged: (v) {
+                  setState(() => _proj.maxZoom = double.parse(v.toStringAsFixed(1)));
+                  widget.onChanged();
+                },
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 36,
+            child: Text(
+              '${_proj.maxZoom.toStringAsFixed(1)}×',
+              style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      );
+
+  Widget _buildToggleRow({
+    required String label,
+    required String description,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) =>
+      Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: const TextStyle(
+                        color: AppColors.textPrimary, fontSize: 12)),
+                const SizedBox(height: 2),
+                Text(description,
+                    style: const TextStyle(
+                        color: AppColors.textMuted, fontSize: 11)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: () => onChanged(!value),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: 36,
+              height: 20,
+              decoration: BoxDecoration(
+                color: value ? AppColors.accent : AppColors.borderColor,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: AnimatedAlign(
+                duration: const Duration(milliseconds: 150),
+                alignment:
+                    value ? Alignment.centerRight : Alignment.centerLeft,
+                child: Container(
+                  margin: const EdgeInsets.all(2),
+                  width: 16,
+                  height: 16,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       );
 
   Widget _orientBtn({

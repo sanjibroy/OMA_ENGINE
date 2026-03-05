@@ -13,12 +13,12 @@ class GridComponent extends Component {
   GridComponent({required this.mapData, required this.spriteCache});
 
   static final _gridLinePaint = Paint()
-    ..color = const Color(0xFF2A2A3A)
+    ..color = const Color(0xFF333333)
     ..strokeWidth = 0.5
     ..style = PaintingStyle.stroke;
 
   static final _borderPaint = Paint()
-    ..color = const Color(0xFF444455)
+    ..color = const Color(0xFF4A4A4A)
     ..strokeWidth = 1.0
     ..style = PaintingStyle.stroke;
 

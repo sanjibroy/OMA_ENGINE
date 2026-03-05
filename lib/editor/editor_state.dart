@@ -63,6 +63,7 @@ class EditorState {
   final ValueNotifier<bool> showGrid;
   final ValueNotifier<int> undoCount;
   final ValueNotifier<int> redoCount;
+  final ValueNotifier<bool> isDirty;
 
   String get currentMapId => _currentMapId;
 
@@ -73,6 +74,8 @@ class EditorState {
       return null;
     }
   }
+
+  bool _suppressDirty = false;
 
   EditorState({required this.mapData})
       : project = _defaultProject(),
@@ -88,14 +91,30 @@ class EditorState {
         isPlayMode = ValueNotifier(false),
         showGrid = ValueNotifier(true),
         undoCount = ValueNotifier(0),
-        redoCount = ValueNotifier(0) {
+        redoCount = ValueNotifier(0),
+        isDirty = ValueNotifier(false) {
     game = EditorGame(mapData: mapData, spriteCache: spriteCache);
   }
 
+  // ─── Dirty tracking ────────────────────────────────────────────────────────
+
+  void markDirty() {
+    if (!_suppressDirty) isDirty.value = true;
+  }
+
+  void markClean() => isDirty.value = false;
+
   // ─── Notifications ─────────────────────────────────────────────────────────
 
-  void notifyMapChanged() => mapChanged.value++;
-  void notifyProjectChanged() => projectChanged.value++;
+  void notifyMapChanged() {
+    mapChanged.value++;
+    markDirty();
+  }
+
+  void notifyProjectChanged() {
+    projectChanged.value++;
+    markDirty();
+  }
 
   // ─── Undo / Redo ───────────────────────────────────────────────────────────
 
@@ -195,8 +214,10 @@ class EditorState {
     selectedTile.value = TileType.grass;
     selectedTileVariant.value = 0;
     await reloadSprites();
+    _suppressDirty = true;
     notifyMapChanged();
     notifyProjectChanged();
+    _suppressDirty = false;
   }
 
   // ─── Map management ────────────────────────────────────────────────────────
@@ -265,8 +286,11 @@ class EditorState {
     mapData.loadFromJson(newMapData.toJson());
     selectedObject.value = null;
     await reloadSprites();
+    _suppressDirty = true;
     notifyMapChanged();
     notifyProjectChanged();
+    _suppressDirty = false;
+    markClean();
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────
@@ -309,5 +333,6 @@ class EditorState {
     showGrid.dispose();
     undoCount.dispose();
     redoCount.dispose();
+    isDirty.dispose();
   }
 }

@@ -26,6 +26,8 @@ class GameProject {
   int viewportWidth;   // virtual viewport W (0 = fullscreen)
   int viewportHeight;  // virtual viewport H (0 = fullscreen)
   bool hudAtBottom; // HUD strip position in the exported game + editor preview
+  bool allowZoom;   // whether the player can zoom with scroll wheel in game
+  double maxZoom;   // maximum zoom level when allowZoom is true
   String androidOrientation; // 'landscape' or 'portrait'
   List<ProjectMap> maps;
 
@@ -47,6 +49,8 @@ class GameProject {
     this.viewportWidth = 0,
     this.viewportHeight = 0,
     this.hudAtBottom = true,
+    this.allowZoom = false,
+    this.maxZoom = 2.0,
     this.androidOrientation = 'landscape',
     this.playerSpeed = 4.0,
     this.playerHealth = 6,
@@ -73,6 +77,8 @@ class GameProject {
         'viewportWidth': viewportWidth,
         'viewportHeight': viewportHeight,
         'hudAtBottom': hudAtBottom,
+        'allowZoom': allowZoom,
+        'maxZoom': maxZoom,
         'androidOrientation': androidOrientation,
         'playerSpeed': playerSpeed,
         'playerHealth': playerHealth,
@@ -91,6 +97,8 @@ class GameProject {
         viewportWidth: j['viewportWidth'] as int? ?? 0,
         viewportHeight: j['viewportHeight'] as int? ?? 0,
         hudAtBottom: j['hudAtBottom'] as bool? ?? true,
+        allowZoom: j['allowZoom'] as bool? ?? false,
+        maxZoom: (j['maxZoom'] as num?)?.toDouble() ?? 2.0,
         androidOrientation: j['androidOrientation'] as String? ?? 'landscape',
         playerSpeed: (j['playerSpeed'] as num?)?.toDouble() ?? 4.0,
         playerHealth: j['playerHealth'] as int? ?? 6,
