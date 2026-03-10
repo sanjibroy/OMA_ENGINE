@@ -94,6 +94,8 @@ class _CenterCanvasState extends State<CenterCanvas> {
       _game.startPlay(
         viewportWidth: _state.project.viewportWidth,
         viewportHeight: _state.project.viewportHeight,
+        effects: _state.project.effects,
+        keyBindings: _state.project.keyBindings,
       );
       // Delay so panel rebuilds finish before we steal focus
       Future.delayed(const Duration(milliseconds: 100), () {
@@ -170,6 +172,8 @@ class _CenterCanvasState extends State<CenterCanvas> {
     await _game.startPlay(
       viewportWidth: _state.project.viewportWidth,
       viewportHeight: _state.project.viewportHeight,
+      effects: _state.project.effects,
+      keyBindings: _state.project.keyBindings,
     );
     Future.delayed(const Duration(milliseconds: 100), () {
       if (mounted) _gameFocusNode.requestFocus();

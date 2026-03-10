@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../models/game_effect.dart';
 import '../../models/game_project.dart';
 import '../../models/game_rule.dart';
 import '../../theme/app_theme.dart';
@@ -46,6 +47,9 @@ extension _TriggerUI on TriggerType {
         TriggerType.playerHealthZero         => Icons.heart_broken,
         TriggerType.gameStart                => Icons.play_circle_outline,
         TriggerType.onTimer                  => Icons.timer,
+        TriggerType.playerEntersWater        => Icons.water,
+        TriggerType.playerExitsWater         => Icons.water_drop_outlined,
+        TriggerType.playerFishes             => Icons.set_meal,
       };
 
   String get shortLabel => switch (this) {
@@ -62,6 +66,9 @@ extension _TriggerUI on TriggerType {
         TriggerType.playerHealthZero         => 'Health = 0',
         TriggerType.gameStart                => 'Game Starts',
         TriggerType.onTimer                  => 'Timer',
+        TriggerType.playerEntersWater        => 'Enters Water',
+        TriggerType.playerExitsWater         => 'Exits Water',
+        TriggerType.playerFishes             => 'Fishes',
       };
 
   Color get catColor => _tCats[category]!.color;
@@ -93,6 +100,9 @@ extension _ActionUI on ActionType {
         ActionType.fadeIn                => Icons.gradient,
         ActionType.fadeOut               => Icons.gradient,
         ActionType.setAlpha              => Icons.opacity,
+        ActionType.launchProjectile      => Icons.rocket_launch,
+        ActionType.stopProjectile        => Icons.cancel_schedule_send,
+        ActionType.playEffect            => Icons.auto_fix_high,
       };
 
   String get shortLabel => switch (this) {
@@ -120,6 +130,9 @@ extension _ActionUI on ActionType {
         ActionType.fadeIn                => 'Fade In',
         ActionType.fadeOut               => 'Fade Out',
         ActionType.setAlpha              => 'Set Opacity',
+        ActionType.launchProjectile      => 'Launch Projectile',
+        ActionType.stopProjectile        => 'Stop Projectile',
+        ActionType.playEffect            => 'Play Effect',
       };
 
   Color get catColor => _aCats[category]!.color;
@@ -333,21 +346,30 @@ class _CategoryPickerDialogState<T> extends State<_CategoryPickerDialog<T>> {
 class RuleEditorDialog extends StatefulWidget {
   final GameRule? existing;
   final List<ProjectMap> availableMaps;
+  final List<GameEffect> availableEffects;
+  final Map<String, String> keyBindings;
 
   const RuleEditorDialog({
     super.key,
     this.existing,
     this.availableMaps = const [],
+    this.availableEffects = const [],
+    this.keyBindings = const {},
   });
 
   static Future<GameRule?> show(BuildContext context,
-      {GameRule? existing, List<ProjectMap> availableMaps = const []}) {
+      {GameRule? existing,
+      List<ProjectMap> availableMaps = const [],
+      List<GameEffect> availableEffects = const [],
+      Map<String, String> keyBindings = const {}}) {
     return showDialog<GameRule>(
       context: context,
       barrierColor: Colors.black54,
       builder: (_) => RuleEditorDialog(
         existing: existing,
         availableMaps: availableMaps,
+        availableEffects: availableEffects,
+        keyBindings: keyBindings,
       ),
     );
   }
@@ -472,6 +494,14 @@ class _RuleEditorDialogState extends State<RuleEditorDialog> {
       triggerParams: Map.from(_triggerParams),
     );
     Navigator.of(context).pop(rule);
+  }
+
+  /// Returns display label for a trigger, appending the bound key if remapped.
+  String _triggerLabel(TriggerType t) {
+    final base = t.shortLabel;
+    final bound = widget.keyBindings[t.name];
+    if (bound == null || bound.isEmpty) return base;
+    return '$base [${bound.toUpperCase()}]';
   }
 
   @override
@@ -712,7 +742,7 @@ class _RuleEditorDialogState extends State<RuleEditorDialog> {
           Expanded(
             child: _pickerButton(
               icon: cond.trigger.icon,
-              label: cond.trigger.shortLabel,
+              label: _triggerLabel(cond.trigger),
               color: cond.trigger.catColor,
               onTap: () => _pickCondition(i),
             ),
@@ -946,6 +976,58 @@ class _RuleEditorDialogState extends State<RuleEditorDialog> {
                         value: e.key,
                         child: Text(e.value),
                       ))
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) setState(() => entry.params[p.key] = v);
+              },
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Effect name: show dropdown of saved effect names
+    if ((p.key == 'effectName' || p.key == 'landEffectName') &&
+        widget.availableEffects.isNotEmpty) {
+      final cur = entry.params[p.key] as String? ?? '';
+      final names = widget.availableEffects.map((e) => e.name).toList();
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('${p.label}:',
+              style: const TextStyle(
+                  color: AppColors.textSecondary, fontSize: 11)),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 130,
+            child: DropdownButtonFormField<String>(
+              value: names.contains(cur) ? cur : null,
+              dropdownColor: AppColors.dialogSurface,
+              hint: const Text('Pick effect',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
+              style: const TextStyle(
+                  color: AppColors.textPrimary, fontSize: 12),
+              isDense: true,
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: AppColors.dialogBg,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(5),
+                  borderSide: const BorderSide(color: AppColors.borderColor),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(5),
+                  borderSide: const BorderSide(color: AppColors.borderColor),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(5),
+                  borderSide: const BorderSide(color: AppColors.accent),
+                ),
+              ),
+              items: names
+                  .map((n) => DropdownMenuItem(value: n, child: Text(n)))
                   .toList(),
               onChanged: (v) {
                 if (v != null) setState(() => entry.params[p.key] = v);

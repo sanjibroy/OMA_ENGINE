@@ -7,6 +7,7 @@ enum GameObjectType {
   coin,
   chest,
   door,
+  waterBody,
 }
 
 extension GameObjectTypeExtension on GameObjectType {
@@ -17,6 +18,7 @@ extension GameObjectTypeExtension on GameObjectType {
         GameObjectType.coin => 'Coin',
         GameObjectType.chest => 'Chest',
         GameObjectType.door => 'Door',
+        GameObjectType.waterBody => 'Water Zone',
       };
 
   String get symbol => switch (this) {
@@ -26,6 +28,7 @@ extension GameObjectTypeExtension on GameObjectType {
         GameObjectType.coin => 'C',
         GameObjectType.chest => 'X',
         GameObjectType.door => 'D',
+        GameObjectType.waterBody => 'W',
       };
 
   Color get color => switch (this) {
@@ -35,6 +38,7 @@ extension GameObjectTypeExtension on GameObjectType {
         GameObjectType.coin => const Color(0xFFFBBF24),
         GameObjectType.chest => const Color(0xFFB45309),
         GameObjectType.door => const Color(0xFF94A3B8),
+        GameObjectType.waterBody => const Color(0xFF29B6F6),
       };
 
   IconData get icon => switch (this) {
@@ -44,6 +48,7 @@ extension GameObjectTypeExtension on GameObjectType {
         GameObjectType.coin => Icons.monetization_on,
         GameObjectType.chest => Icons.inventory_2,
         GameObjectType.door => Icons.door_front_door,
+        GameObjectType.waterBody => Icons.water,
       };
 
   bool get isUnique => this == GameObjectType.playerSpawn;
@@ -66,9 +71,10 @@ class GameObject {
   double floatAmplitude; // pixels up/down
   double floatSpeed;     // cycles per second
   bool projectileEnabled;
+  bool projectileLoop;     // true = loop continuously, false = one-shot
   double projectileAngle;  // degrees (0=right, 90=down)
   double projectileSpeed;  // tiles/sec
-  double projectileRange;  // tiles (loop distance)
+  double projectileRange;  // tiles (distance to destination)
   double projectileArc;    // tiles (peak height above path, 0=linear)
   bool dashEnabled;
   double dashAngle;        // degrees
@@ -94,6 +100,7 @@ class GameObject {
     this.floatAmplitude = 4.0,
     this.floatSpeed = 1.0,
     this.projectileEnabled = false,
+    this.projectileLoop = false,
     this.projectileAngle = 0.0,
     this.projectileSpeed = 3.0,
     this.projectileRange = 5.0,
@@ -124,6 +131,18 @@ class GameObject {
             'targetX': 0,
             'targetY': 0,
           },
+        GameObjectType.waterBody => {
+            'waterMode': 'wade',       // block / wade / swim / boat
+            'flowDirection': 'none',   // none / N / S / E / W
+            'flowStrength': 1.0,       // tiles/sec push
+            'canFish': false,
+            'fishDensity': 3,
+            'damaging': false,
+            'damagePerSecond': 1.0,
+            'animStyle': 'ripple',     // still / ripple / flow / waves
+            'waterColor': 'blue',      // blue / green / brown / red
+            'opacity': 0.6,
+          },
         GameObjectType.playerSpawn => {},
       };
 
@@ -144,6 +163,7 @@ class GameObject {
         'floatAmplitude': floatAmplitude,
         'floatSpeed': floatSpeed,
         'projectileEnabled': projectileEnabled,
+        'projectileLoop': projectileLoop,
         'projectileAngle': projectileAngle,
         'projectileSpeed': projectileSpeed,
         'projectileRange': projectileRange,
@@ -179,6 +199,7 @@ class GameObject {
       floatAmplitude: (json['floatAmplitude'] as num?)?.toDouble() ?? 4.0,
       floatSpeed: (json['floatSpeed'] as num?)?.toDouble() ?? 1.0,
       projectileEnabled: json['projectileEnabled'] as bool? ?? false,
+      projectileLoop: json['projectileLoop'] as bool? ?? false,
       projectileAngle: (json['projectileAngle'] as num?)?.toDouble() ?? 0.0,
       projectileSpeed: (json['projectileSpeed'] as num?)?.toDouble() ?? 3.0,
       projectileRange: (json['projectileRange'] as num?)?.toDouble() ?? 5.0,

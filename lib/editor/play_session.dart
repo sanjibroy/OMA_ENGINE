@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HardwareKeyboard, LogicalKeyboardKey;
+import '../effects/particle_system.dart';
+import '../models/game_effect.dart';
 import '../models/game_object.dart';
 import '../models/game_rule.dart';
 import '../models/map_data.dart';
@@ -132,6 +134,8 @@ class PlaySession {
   final MapData mapData;
   final SpriteCache spriteCache;
   final List<GameRule> rules;
+  final List<GameEffect> effects;
+  final Map<String, String> keyBindings;
 
   final void Function(int health, int score) onHudUpdate;
   final void Function(String msg) onMessage;
@@ -157,8 +161,17 @@ class PlaySession {
   final Map<String, double> _cooldowns = {};
   final Map<String, double> _timerElapsed = {};
   final Map<String, double> _projectileDist = {};
+  final Set<String> _activeProjectiles = {};
+  final Map<String, double> _projectileHideTimer = {};
+  // Stores the GameEffect config to fire when a projectile lands
+  final Map<String, GameEffect> _landEffects = {};
   final Map<String, _DashFx> _dashFx = {};
+  final ParticleSystem _particles = ParticleSystem();
   static const double _hitCooldown = 1.5;
+
+  bool _playerInWater = false;
+  double _waterDamageTimer = 0;
+  double _waterSpeedMult = 1.0;
 
   Vector2 get playerPos => _playerPos;
   int get health => _health;
@@ -168,10 +181,56 @@ class PlaySession {
     required this.mapData,
     required this.spriteCache,
     required this.rules,
+    required this.effects,
+    this.keyBindings = const {},
     required this.onHudUpdate,
     required this.onMessage,
     required this.onGameEvent,
   });
+
+  /// Resolves the physical key bound to a key trigger type.
+  /// Returns null if no custom binding (caller uses the default key).
+  LogicalKeyboardKey? _boundKey(TriggerType t) {
+    final id = keyBindings[t.name];
+    if (id == null || id.isEmpty) return null;
+    return _kKeyMap[id];
+  }
+
+  static const Map<String, LogicalKeyboardKey> _kKeyMap = {
+    'a': LogicalKeyboardKey.keyA, 'b': LogicalKeyboardKey.keyB,
+    'c': LogicalKeyboardKey.keyC, 'd': LogicalKeyboardKey.keyD,
+    'e': LogicalKeyboardKey.keyE, 'f': LogicalKeyboardKey.keyF,
+    'g': LogicalKeyboardKey.keyG, 'h': LogicalKeyboardKey.keyH,
+    'i': LogicalKeyboardKey.keyI, 'j': LogicalKeyboardKey.keyJ,
+    'k': LogicalKeyboardKey.keyK, 'l': LogicalKeyboardKey.keyL,
+    'm': LogicalKeyboardKey.keyM, 'n': LogicalKeyboardKey.keyN,
+    'o': LogicalKeyboardKey.keyO, 'p': LogicalKeyboardKey.keyP,
+    'q': LogicalKeyboardKey.keyQ, 'r': LogicalKeyboardKey.keyR,
+    's': LogicalKeyboardKey.keyS, 't': LogicalKeyboardKey.keyT,
+    'u': LogicalKeyboardKey.keyU, 'v': LogicalKeyboardKey.keyV,
+    'w': LogicalKeyboardKey.keyW, 'x': LogicalKeyboardKey.keyX,
+    'y': LogicalKeyboardKey.keyY, 'z': LogicalKeyboardKey.keyZ,
+    '0': LogicalKeyboardKey.digit0, '1': LogicalKeyboardKey.digit1,
+    '2': LogicalKeyboardKey.digit2, '3': LogicalKeyboardKey.digit3,
+    '4': LogicalKeyboardKey.digit4, '5': LogicalKeyboardKey.digit5,
+    '6': LogicalKeyboardKey.digit6, '7': LogicalKeyboardKey.digit7,
+    '8': LogicalKeyboardKey.digit8, '9': LogicalKeyboardKey.digit9,
+    'space': LogicalKeyboardKey.space,
+    'enter': LogicalKeyboardKey.enter,
+    'tab': LogicalKeyboardKey.tab,
+    'shift': LogicalKeyboardKey.shiftLeft,
+    'ctrl': LogicalKeyboardKey.controlLeft,
+    'escape': LogicalKeyboardKey.escape,
+    'f1': LogicalKeyboardKey.f1, 'f2': LogicalKeyboardKey.f2,
+    'f3': LogicalKeyboardKey.f3, 'f4': LogicalKeyboardKey.f4,
+  };
+
+  GameEffect? _findEffect(String name) {
+    for (final e in effects) {
+      if (e.name == name) return e;
+    }
+    return null;
+  }
 
   // Called once synchronously before the first update()
   void init() {
@@ -252,7 +311,10 @@ class PlaySession {
     _tickCooldowns(dt);
     _updateFades(dt);
     _updateFx(dt);
-    _checkKeyTriggers(dt); // fires key rules + handles movement
+    _tickProjectileHideTimers(dt);
+    _particles.update(dt);
+    _checkWater(dt);        // update water state BEFORE movement
+    _checkKeyTriggers(dt); // uses correct _waterSpeedMult this frame
     _checkTimerRules(dt);
     _moveEnemies(dt);
     _checkCollisions();
@@ -262,11 +324,29 @@ class PlaySession {
   void _updateFx(double dt) {
     final ts = mapData.tileSize.toDouble();
     for (final obj in mapData.objects) {
-      if (obj.projectileEnabled) {
+      if (_hiddenObjectIds.contains(obj.id)) continue;
+      if (obj.projectileEnabled && _activeProjectiles.contains(obj.id)) {
         final speedPx = obj.projectileSpeed * ts;
-        final rangePx = obj.projectileRange * ts;
-        _projectileDist[obj.id] =
-            ((_projectileDist[obj.id] ?? 0.0) + speedPx * dt) % rangePx.clamp(0.01, double.infinity);
+        final rangePx = (obj.projectileRange * ts).clamp(0.01, double.infinity);
+        final prev = _projectileDist[obj.id] ?? 0.0;
+        final next = prev + speedPx * dt;
+        if (obj.projectileLoop) {
+          _projectileDist[obj.id] = next % (rangePx * 2);
+        } else {
+          _projectileDist[obj.id] = next.clamp(0.0, rangePx);
+          if (next >= rangePx) {
+            _activeProjectiles.remove(obj.id);
+            // Fire land effect at landing position if no hide-timer is set
+            if (!_projectileHideTimer.containsKey(obj.id)) {
+              final fx = _landEffects.remove(obj.id);
+              if (fx != null) {
+                final wx = (obj.tileX + 0.5) * ts;
+                final wy = (obj.tileY + 0.5) * ts;
+                _spawnEffect(fx, wx, wy);
+              }
+            }
+          }
+        }
       }
       if (obj.dashEnabled) {
         _dashFx.putIfAbsent(obj.id, () => _DashFx(
@@ -278,12 +358,28 @@ class PlaySession {
       }
     }
     for (final e in _enemies) {
+      if (e.hidden) continue;
       final obj = e.source;
-      if (obj.projectileEnabled) {
+      if (obj.projectileEnabled && _activeProjectiles.contains(obj.id)) {
         final speedPx = obj.projectileSpeed * ts;
-        final rangePx = obj.projectileRange * ts;
-        _projectileDist[obj.id] =
-            ((_projectileDist[obj.id] ?? 0.0) + speedPx * dt) % rangePx.clamp(0.01, double.infinity);
+        final rangePx = (obj.projectileRange * ts).clamp(0.01, double.infinity);
+        final prev = _projectileDist[obj.id] ?? 0.0;
+        final next = prev + speedPx * dt;
+        if (obj.projectileLoop) {
+          _projectileDist[obj.id] = next % (rangePx * 2);
+        } else {
+          _projectileDist[obj.id] = next.clamp(0.0, rangePx);
+          if (next >= rangePx) {
+            _activeProjectiles.remove(obj.id);
+            // Fire land effect at landing position if no hide-timer is set
+            if (!_projectileHideTimer.containsKey(obj.id)) {
+              final fx = _landEffects.remove(obj.id);
+              if (fx != null) {
+                _spawnEffect(fx, e.pos.x, e.pos.y);
+              }
+            }
+          }
+        }
       }
       if (obj.dashEnabled) {
         _dashFx.putIfAbsent(obj.id, () => _DashFx(
@@ -299,14 +395,18 @@ class PlaySession {
   (double, double) _fxOffset(GameObject obj, double ts) {
     double dx = 0, dy = 0;
     if (obj.projectileEnabled) {
-      final dist = _projectileDist[obj.id] ?? 0.0;
+      final rangePx = (obj.projectileRange * ts).clamp(0.01, double.infinity);
+      final raw = _projectileDist[obj.id] ?? 0.0;
+      // Ping-pong for loop: forward 0→rangePx (land), then back rangePx→0 (return)
+      final dist = obj.projectileLoop
+          ? (raw <= rangePx ? raw : rangePx * 2 - raw)
+          : raw;
       final rad = obj.projectileAngle * pi / 180.0;
       dx += dist * cos(rad);
       dy += dist * sin(rad);
       if (obj.projectileArc > 0) {
-        final rangePx = (obj.projectileRange * ts).clamp(0.01, double.infinity);
-        final progress = dist / rangePx;
-        // Arc goes UP (negative Y in screen space) at midpoint, back to 0 at ends
+        final progress = (dist / rangePx).clamp(0.0, 1.0);
+        // Arc goes UP (negative Y in screen space) at midpoint, back to 0 at endpoints
         dy -= obj.projectileArc * ts * sin(pi * progress);
       }
     }
@@ -376,14 +476,15 @@ class PlaySession {
   void _checkKeyTriggers(double dt) {
     final keys = HardwareKeyboard.instance.logicalKeysPressed;
     final ts = mapData.tileSize.toDouble();
-    final spd = _playerSpeedTiles * ts * dt;
+    final spd = _playerSpeedTiles * ts * dt * _waterSpeedMult;
 
     // Fire key trigger rules (move player, score, messages, etc.)
-    bool up    = keys.contains(LogicalKeyboardKey.arrowUp)    || keys.contains(LogicalKeyboardKey.keyW);
-    bool down  = keys.contains(LogicalKeyboardKey.arrowDown)  || keys.contains(LogicalKeyboardKey.keyS);
-    bool left  = keys.contains(LogicalKeyboardKey.arrowLeft)  || keys.contains(LogicalKeyboardKey.keyA);
-    bool right = keys.contains(LogicalKeyboardKey.arrowRight) || keys.contains(LogicalKeyboardKey.keyD);
-    bool space = keys.contains(LogicalKeyboardKey.space);
+    // Arrows always work for movement; the secondary key respects bindings.
+    bool up    = keys.contains(LogicalKeyboardKey.arrowUp)    || keys.contains(_boundKey(TriggerType.keyUpPressed)    ?? LogicalKeyboardKey.keyW);
+    bool down  = keys.contains(LogicalKeyboardKey.arrowDown)  || keys.contains(_boundKey(TriggerType.keyDownPressed)  ?? LogicalKeyboardKey.keyS);
+    bool left  = keys.contains(LogicalKeyboardKey.arrowLeft)  || keys.contains(_boundKey(TriggerType.keyLeftPressed)  ?? LogicalKeyboardKey.keyA);
+    bool right = keys.contains(LogicalKeyboardKey.arrowRight) || keys.contains(_boundKey(TriggerType.keyRightPressed) ?? LogicalKeyboardKey.keyD);
+    bool space = keys.contains(_boundKey(TriggerType.keySpacePressed) ?? LogicalKeyboardKey.space);
 
     if (up)    _fireKey(TriggerType.keyUpPressed,    dt, dirX:  0, dirY: -1);
     if (down)  _fireKey(TriggerType.keyDownPressed,  dt, dirX:  0, dirY:  1);
@@ -420,7 +521,17 @@ class PlaySession {
     final col = mapData.getTileCollision(tx, ty);
     if (col == 1) return false; // force passable
     if (col == 2) return true;  // force solid
-    return mapData.getTile(tx, ty).isSolid;
+    if (mapData.getTile(tx, ty).isSolid) return true;
+    // Block-mode water zones act as solid walls
+    for (final obj in mapData.objects) {
+      if (obj.type != GameObjectType.waterBody) continue;
+      if (_hiddenObjectIds.contains(obj.id)) continue;
+      if (obj.tileX == tx && obj.tileY == ty &&
+          (obj.properties['waterMode'] as String? ?? 'wade') == 'block') {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Returns true if the player bounding box at (cx, cy) overlaps a solid tile.
@@ -538,6 +649,75 @@ class PlaySession {
     }
   }
 
+  void _checkWater(double dt) {
+    final ts = mapData.tileSize.toDouble();
+    final px = (_playerPos.x / ts).floor().clamp(0, mapData.width - 1);
+    final py = (_playerPos.y / ts).floor().clamp(0, mapData.height - 1);
+
+    GameObject? waterObj;
+    for (final obj in mapData.objects) {
+      if (obj.type != GameObjectType.waterBody) continue;
+      if (_hiddenObjectIds.contains(obj.id)) continue;
+      if (obj.tileX == px && obj.tileY == py) { waterObj = obj; break; }
+    }
+
+    final nowInWater = waterObj != null;
+
+    if (nowInWater && !_playerInWater) {
+      _playerInWater = true;
+      _fire(TriggerType.playerEntersWater, triggerObj: waterObj, cooldownKey: 'waterEnter_${waterObj.id}');
+    } else if (!nowInWater && _playerInWater) {
+      _playerInWater = false;
+      _waterDamageTimer = 0;
+      _fire(TriggerType.playerExitsWater, cooldownKey: 'waterExit');
+    }
+
+    if (waterObj != null) {
+      final mode = waterObj.properties['waterMode'] as String? ?? 'wade';
+      _waterSpeedMult = switch (mode) {
+        'block' => 0.0,
+        'wade'  => 0.5,
+        'swim'  => 0.7,
+        'boat'  => 1.2,
+        _ => 1.0,
+      };
+
+      // Flow push
+      final flowDir = waterObj.properties['flowDirection'] as String? ?? 'none';
+      final flowStr = (waterObj.properties['flowStrength'] as num?)?.toDouble() ?? 1.0;
+      if (flowDir != 'none') {
+        final flowPx = flowStr * ts * dt;
+        switch (flowDir) {
+          case 'N': _movePlayer(0, -flowPx);
+          case 'S': _movePlayer(0, flowPx);
+          case 'E': _movePlayer(flowPx, 0);
+          case 'W': _movePlayer(-flowPx, 0);
+        }
+      }
+
+      // Damage over time
+      final damaging = waterObj.properties['damaging'] as bool? ?? false;
+      if (damaging) {
+        final dps = (waterObj.properties['damagePerSecond'] as num?)?.toDouble() ?? 1.0;
+        _waterDamageTimer += dt;
+        if (_waterDamageTimer >= 1.0) {
+          _waterDamageTimer -= 1.0;
+          _health = (_health - dps.round()).clamp(0, 100);
+          onHudUpdate(_health, _score);
+          if (_health <= 0) _fire(TriggerType.playerHealthZero);
+        }
+      }
+
+      // Fishing (space while in fishable water)
+      final canFish = waterObj.properties['canFish'] as bool? ?? false;
+      if (canFish && HardwareKeyboard.instance.logicalKeysPressed.contains(LogicalKeyboardKey.space)) {
+        _fire(TriggerType.playerFishes, triggerObj: waterObj, cooldownKey: 'fish_${waterObj.id}');
+      }
+    } else {
+      _waterSpeedMult = 1.0;
+    }
+  }
+
   void _fire(TriggerType trigger, {GameObject? triggerObj, String? cooldownKey}) {
     final key = cooldownKey ?? trigger.name;
     if (_cooldowns.containsKey(key)) return;
@@ -571,15 +751,15 @@ class PlaySession {
     final keys = HardwareKeyboard.instance.logicalKeysPressed;
     return switch (t) {
       TriggerType.keyUpPressed =>
-        keys.contains(LogicalKeyboardKey.arrowUp) || keys.contains(LogicalKeyboardKey.keyW),
+        keys.contains(LogicalKeyboardKey.arrowUp) || keys.contains(_boundKey(TriggerType.keyUpPressed) ?? LogicalKeyboardKey.keyW),
       TriggerType.keyDownPressed =>
-        keys.contains(LogicalKeyboardKey.arrowDown) || keys.contains(LogicalKeyboardKey.keyS),
+        keys.contains(LogicalKeyboardKey.arrowDown) || keys.contains(_boundKey(TriggerType.keyDownPressed) ?? LogicalKeyboardKey.keyS),
       TriggerType.keyLeftPressed =>
-        keys.contains(LogicalKeyboardKey.arrowLeft) || keys.contains(LogicalKeyboardKey.keyA),
+        keys.contains(LogicalKeyboardKey.arrowLeft) || keys.contains(_boundKey(TriggerType.keyLeftPressed) ?? LogicalKeyboardKey.keyA),
       TriggerType.keyRightPressed =>
-        keys.contains(LogicalKeyboardKey.arrowRight) || keys.contains(LogicalKeyboardKey.keyD),
+        keys.contains(LogicalKeyboardKey.arrowRight) || keys.contains(_boundKey(TriggerType.keyRightPressed) ?? LogicalKeyboardKey.keyD),
       TriggerType.keySpacePressed =>
-        keys.contains(LogicalKeyboardKey.space),
+        keys.contains(_boundKey(TriggerType.keySpacePressed) ?? LogicalKeyboardKey.space),
       TriggerType.playerHealthZero => _health <= 0,
       TriggerType.enemyNearPlayer =>
         _enemies.any((e) => !e.hidden && (e.pos - _playerPos).length < ts * 5),
@@ -599,7 +779,23 @@ class PlaySession {
         o.tileX == (_playerPos.x / ts).floor() && o.tileY == (_playerPos.y / ts).floor()),
       TriggerType.gameStart => true,
       TriggerType.onTimer => false,
+      TriggerType.playerEntersWater => _playerInWater,
+      TriggerType.playerExitsWater => !_playerInWater,
+      TriggerType.playerFishes => _playerInWater &&
+        mapData.objects.any((o) =>
+          o.type == GameObjectType.waterBody &&
+          !_hiddenObjectIds.contains(o.id) &&
+          (o.properties['canFish'] as bool? ?? false) &&
+          o.tileX == (_playerPos.x / ts).floor() &&
+          o.tileY == (_playerPos.y / ts).floor()),
     };
+  }
+
+  GameObject? _findObjectById(String id) {
+    for (final obj in mapData.objects) {
+      if (obj.id == id) return obj;
+    }
+    return null;
   }
 
   GameObject? _findNamedObject(String name) {
@@ -607,6 +803,34 @@ class PlaySession {
       if (obj.name == name) return obj;
     }
     return null;
+  }
+
+  void _tickProjectileHideTimers(double dt) {
+    final ts = mapData.tileSize.toDouble();
+    for (final id in _projectileHideTimer.keys.toList()) {
+      _projectileHideTimer[id] = _projectileHideTimer[id]! - dt;
+      if (_projectileHideTimer[id]! <= 0) {
+        _projectileHideTimer.remove(id);
+        _activeProjectiles.remove(id);
+        _projectileDist[id] = 0.0;
+        final obj = _findObjectById(id);
+        if (obj != null) {
+          // Resolve current world position for the effect
+          final enemy = _enemyFor(obj);
+          double wx, wy;
+          if (enemy != null) {
+            wx = enemy.pos.x; wy = enemy.pos.y;
+            enemy.hidden = true;
+          } else {
+            wx = (obj.tileX + 0.5) * ts; wy = (obj.tileY + 0.5) * ts;
+            _hiddenObjectIds.add(id);
+          }
+          // Fire land effect if configured
+          final fx = _landEffects.remove(id);
+          if (fx != null) _spawnEffect(fx, wx, wy);
+        }
+      }
+    }
   }
 
   List<GameObject> _findTaggedObjects(String tag) {
@@ -627,7 +851,7 @@ class PlaySession {
       switch (a.type) {
         case ActionType.movePlayer:
           final speed = ((a.params['speed'] as int?) ?? 4).toDouble();
-          final spd = speed * ts * dt;
+          final spd = speed * ts * dt * _waterSpeedMult;
           _movePlayer(dirX * spd, dirY * spd);
         case ActionType.adjustHealth:
           final delta = (a.params['value'] as int?) ?? 0;
@@ -868,9 +1092,148 @@ class PlaySession {
               e.fade = null;
             }
           }
+        case ActionType.launchProjectile:
+          final target = a.params['target'] as String? ?? 'named';
+          final fromObjName = (a.params['fromObject'] as String? ?? '').trim();
+          final fromObj = fromObjName.isNotEmpty ? _findNamedObject(fromObjName) : null;
+          // Resolve launch origin in pixels (accounts for enemy moving position)
+          double originPx, originPy;
+          if (fromObj != null) {
+            final fromEnemy = _enemyFor(fromObj);
+            if (fromEnemy != null) {
+              originPx = fromEnemy.pos.x;
+              originPy = fromEnemy.pos.y;
+            } else {
+              originPx = (fromObj.tileX + 0.5) * ts;
+              originPy = (fromObj.tileY + 0.5) * ts;
+            }
+          } else {
+            originPx = _playerPos.x;
+            originPy = _playerPos.y;
+          }
+          List<GameObject> projectiles = [];
+          if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) projectiles.add(obj);
+          } else if (target == 'tag') {
+            projectiles.addAll(_findTaggedObjects(a.params['tag'] as String? ?? ''));
+          }
+          final hideAfterSec = double.tryParse(a.params['hideAfter']?.toString() ?? '') ?? 0.0;
+          final landFxName = (a.params['landEffectName'] as String? ?? '').trim();
+          final landFxDef = landFxName.isNotEmpty ? _findEffect(landFxName) : null;
+          for (final obj in projectiles) {
+            _projectileDist[obj.id] = 0.0;
+            _activeProjectiles.add(obj.id);
+            if (hideAfterSec > 0) {
+              _projectileHideTimer[obj.id] = hideAfterSec;
+            } else {
+              _projectileHideTimer.remove(obj.id);
+            }
+            if (landFxDef != null) {
+              _landEffects[obj.id] = landFxDef;
+            } else {
+              _landEffects.remove(obj.id);
+            }
+            final bombEnemy = _enemyFor(obj);
+            if (bombEnemy != null) {
+              // Enemy-type: update pos and e.hidden
+              bombEnemy.pos.x = originPx;
+              bombEnemy.pos.y = originPy;
+              bombEnemy.hidden = false;
+              bombEnemy.alpha = 1.0;
+              bombEnemy.fade = null;
+            } else {
+              // Non-enemy: update tileX/tileY and _hiddenObjectIds
+              obj.tileX = (originPx / ts - 0.5).round();
+              obj.tileY = (originPy / ts - 0.5).round();
+              _hiddenObjectIds.remove(obj.id);
+              _objectAlpha[obj.id] = 1.0;
+              _objectFades.remove(obj.id);
+            }
+          }
+        case ActionType.stopProjectile:
+          final stopTarget = a.params['target'] as String? ?? 'named';
+          List<GameObject> stopList = [];
+          if (stopTarget == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) stopList.add(obj);
+          } else if (stopTarget == 'tag') {
+            stopList.addAll(_findTaggedObjects(a.params['tag'] as String? ?? ''));
+          }
+          for (final obj in stopList) {
+            _activeProjectiles.remove(obj.id);
+            _projectileDist[obj.id] = 0.0;
+            _projectileHideTimer.remove(obj.id);
+            _landEffects.remove(obj.id);
+          }
+        case ActionType.playEffect:
+          final fxName = (a.params['effectName'] as String? ?? '').trim();
+          final fxDef = _findEffect(fxName);
+          if (fxDef == null) break;
+          final effectTarget = a.params['target'] as String? ?? 'trigger';
+          final positions = <(double, double)>[];
+          if (effectTarget == 'trigger' && triggerObj != null) {
+            final en = _enemyFor(triggerObj);
+            positions.add(en != null
+                ? (en.pos.x, en.pos.y)
+                : ((triggerObj.tileX + 0.5) * ts, (triggerObj.tileY + 0.5) * ts));
+          } else if (effectTarget == 'player') {
+            positions.add((_playerPos.x, _playerPos.y));
+          } else if (effectTarget == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) {
+              final en = _enemyFor(obj);
+              positions.add(en != null
+                  ? (en.pos.x, en.pos.y)
+                  : ((obj.tileX + 0.5) * ts, (obj.tileY + 0.5) * ts));
+            }
+          } else if (effectTarget == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+              final en = _enemyFor(obj);
+              positions.add(en != null
+                  ? (en.pos.x, en.pos.y)
+                  : ((obj.tileX + 0.5) * ts, (obj.tileY + 0.5) * ts));
+            }
+          }
+          for (final pos in positions) {
+            _spawnEffect(fxDef, pos.$1, pos.$2);
+          }
         default:
           break;
       }
+    }
+  }
+
+  void _spawnEffect(GameEffect fx, double wx, double wy) {
+    final ts = mapData.tileSize.toDouble();
+    final spreadPx = fx.spread * ts;
+    final speedPx = fx.speed * ts;
+    final sm = fx.particleSize;
+    switch (fx.type) {
+      case 'blast':
+        _particles.spawnBlast(wx, wy,
+            count: fx.count,
+            radiusPx: fx.radius * ts,
+            durationSec: fx.duration < 0 ? 0.8 : fx.duration,
+            theme: BlastThemeExt.fromId(fx.blastColor),
+            sizeMultiplier: sm);
+      case 'fire':
+        _particles.startFire(wx, wy,
+            intensity: fx.intensity, spreadPx: spreadPx, speedPx: speedPx,
+            duration: fx.duration, sizeMultiplier: sm, maxParticles: fx.maxParticles);
+      case 'snow':
+        _particles.startSnow(wx, wy,
+            density: fx.intensity, areaPx: spreadPx, speedPx: speedPx,
+            duration: fx.duration, sizeMultiplier: sm, maxParticles: fx.maxParticles);
+      case 'electric':
+        _particles.spawnElectric(wx, wy,
+            arcCount: fx.intensity, rangePx: spreadPx,
+            durationSec: fx.duration < 0 ? 0.35 : fx.duration,
+            sizeMultiplier: sm);
+      case 'smoke':
+        _particles.startSmoke(wx, wy,
+            density: fx.intensity, spreadPx: spreadPx, speedPx: speedPx,
+            duration: fx.duration, sizeMultiplier: sm, maxParticles: fx.maxParticles);
     }
   }
 
@@ -878,8 +1241,16 @@ class PlaySession {
     final ts = mapData.tileSize.toDouble();
     final r = ts * 0.32;
 
+    // Water body overlays — drawn first, below everything
     for (final obj in mapData.objects) {
-      if (obj.type == GameObjectType.playerSpawn || obj.type == GameObjectType.enemy) continue;
+      if (obj.type != GameObjectType.waterBody) continue;
+      if (_hiddenObjectIds.contains(obj.id)) continue;
+      _drawWaterTile(canvas, obj, ts);
+    }
+
+    for (final obj in mapData.objects) {
+      if (obj.type == GameObjectType.playerSpawn || obj.type == GameObjectType.enemy ||
+          obj.type == GameObjectType.waterBody) continue;
       if (_hiddenObjectIds.contains(obj.id)) continue;
       final alpha = _objectAlpha[obj.id] ?? 1.0;
       final floatY = obj.floatEnabled
@@ -922,6 +1293,9 @@ class PlaySession {
             const Color(0xFF4ADE80), 'P', alpha: _playerAlpha);
       }
     }
+
+    // Particles — always on top
+    _particles.render(canvas);
   }
 
   void _drawObject(Canvas canvas, Offset center, double ts, double r, GameObjectType type,
@@ -985,6 +1359,45 @@ class PlaySession {
       textDirection: TextDirection.ltr,
     )..layout();
     tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
+  }
+
+  void _drawWaterTile(Canvas canvas, GameObject obj, double ts) {
+    final opacity = (obj.properties['opacity'] as num?)?.toDouble() ?? 0.6;
+    final colorName = obj.properties['waterColor'] as String? ?? 'blue';
+    final animStyle = obj.properties['animStyle'] as String? ?? 'ripple';
+
+    final baseColor = switch (colorName) {
+      'green' => const Color(0xFF26A69A),
+      'brown' => const Color(0xFF8D6E63),
+      'red'   => const Color(0xFFEF5350),
+      _       => const Color(0xFF29B6F6),
+    };
+
+    double alpha = opacity;
+    if (animStyle == 'ripple' || animStyle == 'waves') {
+      final pulse = sin(2 * pi * _elapsedSec * 0.8 + obj.tileX * 0.5 + obj.tileY * 0.3);
+      alpha = (opacity + pulse * 0.08).clamp(0.0, 1.0);
+    }
+
+    final rect = Rect.fromLTWH(obj.tileX * ts, obj.tileY * ts, ts, ts);
+    canvas.drawRect(rect, Paint()..color = baseColor.withOpacity(alpha));
+
+    if (animStyle != 'still') {
+      final lineOpacity = (alpha * 0.35).clamp(0.0, 1.0);
+      final linePaint = Paint()
+        ..color = Colors.white.withOpacity(lineOpacity)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke;
+      final phase = (_elapsedSec * 1.5 + obj.tileX * 0.2 + obj.tileY * 0.2) % 1.0;
+      final y = rect.top + ts * phase;
+      if (y < rect.bottom) {
+        canvas.drawLine(
+          Offset(rect.left + ts * 0.15, y),
+          Offset(rect.left + ts * 0.85, y),
+          linePaint,
+        );
+      }
+    }
   }
 }
 

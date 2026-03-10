@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../models/game_project.dart';
+import '../../models/game_rule.dart';
 import '../../theme/app_theme.dart';
 
 class ProjectSettingsDialog extends StatefulWidget {
@@ -225,6 +226,18 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
                       ),
                     ],
                   ),
+
+                  const SizedBox(height: 24),
+
+                  // ── Key Bindings ─────────────────────────────────────────
+                  _sectionLabel('KEY BINDINGS'),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Remap action keys. Arrow keys always work for movement.',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+                  ),
+                  const SizedBox(height: 10),
+                  _KeyBindingsSection(project: _proj, onChanged: widget.onChanged),
 
                   const SizedBox(height: 24),
 
@@ -503,4 +516,199 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
           ),
         ),
       );
+}
+
+// ─── Key Bindings Section ─────────────────────────────────────────────────────
+
+class _KeyBindingsSection extends StatefulWidget {
+  final GameProject project;
+  final VoidCallback onChanged;
+
+  const _KeyBindingsSection({required this.project, required this.onChanged});
+
+  @override
+  State<_KeyBindingsSection> createState() => _KeyBindingsSectionState();
+}
+
+class _KeyBindingsSectionState extends State<_KeyBindingsSection> {
+  // Which trigger is currently waiting for a key press (null = none)
+  TriggerType? _capturing;
+
+  static const _bindable = [
+    TriggerType.keyUpPressed,
+    TriggerType.keyDownPressed,
+    TriggerType.keyLeftPressed,
+    TriggerType.keyRightPressed,
+    TriggerType.keySpacePressed,
+  ];
+
+  static const _defaultKeys = {
+    TriggerType.keyUpPressed:    'W',
+    TriggerType.keyDownPressed:  'S',
+    TriggerType.keyLeftPressed:  'A',
+    TriggerType.keyRightPressed: 'D',
+    TriggerType.keySpacePressed: 'Space',
+  };
+
+  static const _labels = {
+    TriggerType.keyUpPressed:    'Move Up',
+    TriggerType.keyDownPressed:  'Move Down',
+    TriggerType.keyLeftPressed:  'Move Left',
+    TriggerType.keyRightPressed: 'Move Right',
+    TriggerType.keySpacePressed: 'Action',
+  };
+
+  String _displayKey(TriggerType t) {
+    final bound = widget.project.keyBindings[t.name];
+    if (bound == null || bound.isEmpty) return _defaultKeys[t]!;
+    return bound.toUpperCase();
+  }
+
+  bool _isDefault(TriggerType t) {
+    final bound = widget.project.keyBindings[t.name];
+    return bound == null || bound.isEmpty;
+  }
+
+  void _startCapture(TriggerType t) => setState(() => _capturing = t);
+
+  void _cancelCapture() => setState(() => _capturing = null);
+
+  void _applyCapture(TriggerType t, String keyId) {
+    setState(() {
+      widget.project.keyBindings[t.name] = keyId;
+      _capturing = null;
+    });
+    widget.onChanged();
+  }
+
+  void _resetBinding(TriggerType t) {
+    setState(() => widget.project.keyBindings.remove(t.name));
+    widget.onChanged();
+  }
+
+  /// Convert a LogicalKeyboardKey to a short lowercase identifier string.
+  /// Returns null if the key is not bindable (e.g. modifier-only, escape).
+  String? _keyToId(LogicalKeyboardKey key) {
+    // Letters
+    if (key.keyId >= 0x00000061 && key.keyId <= 0x0000007a) {
+      return String.fromCharCode(key.keyId);
+    }
+    // Digits
+    if (key.keyId >= 0x00000030 && key.keyId <= 0x00000039) {
+      return String.fromCharCode(key.keyId);
+    }
+    if (key == LogicalKeyboardKey.space) return 'space';
+    if (key == LogicalKeyboardKey.enter) return 'enter';
+    if (key == LogicalKeyboardKey.tab) return 'tab';
+    if (key == LogicalKeyboardKey.shiftLeft || key == LogicalKeyboardKey.shiftRight) return 'shift';
+    if (key == LogicalKeyboardKey.controlLeft || key == LogicalKeyboardKey.controlRight) return 'ctrl';
+    if (key == LogicalKeyboardKey.f1) return 'f1';
+    if (key == LogicalKeyboardKey.f2) return 'f2';
+    if (key == LogicalKeyboardKey.f3) return 'f3';
+    if (key == LogicalKeyboardKey.f4) return 'f4';
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return KeyboardListener(
+      focusNode: FocusNode()..requestFocus(),
+      autofocus: _capturing != null,
+      onKeyEvent: (event) {
+        if (_capturing == null) return;
+        if (event is! KeyDownEvent) return;
+        if (event.logicalKey == LogicalKeyboardKey.escape) {
+          _cancelCapture();
+          return;
+        }
+        final id = _keyToId(event.logicalKey);
+        if (id != null) _applyCapture(_capturing!, id);
+      },
+      child: Column(
+        children: _bindable.map((t) {
+          final capturing = _capturing == t;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 90,
+                  child: Text(_labels[t]!,
+                      style: const TextStyle(
+                          color: AppColors.textSecondary, fontSize: 12)),
+                ),
+                // Current / default key chip
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => capturing ? _cancelCapture() : _startCapture(t),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 120),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: capturing
+                            ? AppColors.accent.withOpacity(0.18)
+                            : AppColors.surfaceBg,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: capturing ? AppColors.accent : AppColors.borderColor,
+                          width: capturing ? 1.5 : 1,
+                        ),
+                      ),
+                      child: capturing
+                          ? const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.keyboard, size: 13, color: AppColors.accent),
+                                SizedBox(width: 6),
+                                Text('Press a key…',
+                                    style: TextStyle(
+                                        color: AppColors.accent, fontSize: 12,
+                                        fontWeight: FontWeight.w500)),
+                              ],
+                            )
+                          : Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  _displayKey(t),
+                                  style: TextStyle(
+                                    color: _isDefault(t)
+                                        ? AppColors.textSecondary
+                                        : AppColors.accent,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+                ),
+                // Reset button (only shown when custom binding set)
+                if (!_isDefault(t)) ...[
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () => _resetBinding(t),
+                    child: Tooltip(
+                      message: 'Reset to default',
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceBg,
+                          borderRadius: BorderRadius.circular(5),
+                          border: Border.all(color: AppColors.borderColor),
+                        ),
+                        child: const Icon(Icons.refresh,
+                            size: 13, color: AppColors.textMuted),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
 }

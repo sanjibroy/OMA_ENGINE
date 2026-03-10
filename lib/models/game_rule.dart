@@ -20,6 +20,10 @@ enum TriggerType {
   playerHealthZero,
   gameStart,
   onTimer,
+  // Water
+  playerEntersWater,
+  playerExitsWater,
+  playerFishes,
 }
 
 extension TriggerTypeExtension on TriggerType {
@@ -37,6 +41,9 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.playerHealthZero => 'Player health reaches 0',
         TriggerType.gameStart => 'Game starts',
         TriggerType.onTimer => 'Timer (repeating)',
+        TriggerType.playerEntersWater => 'Player enters Water Zone',
+        TriggerType.playerExitsWater => 'Player exits Water Zone',
+        TriggerType.playerFishes => 'Player fishes (Space in water)',
       };
 
   TriggerCategory get category => switch (this) {
@@ -50,7 +57,10 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.playerTouchesCollectible ||
         TriggerType.playerTouchesDoor ||
         TriggerType.playerTouchesNpc ||
-        TriggerType.playerHealthZero =>
+        TriggerType.playerHealthZero ||
+        TriggerType.playerEntersWater ||
+        TriggerType.playerExitsWater ||
+        TriggerType.playerFishes =>
           TriggerCategory.player,
         TriggerType.enemyNearPlayer => TriggerCategory.enemy,
         TriggerType.gameStart || TriggerType.onTimer => TriggerCategory.game,
@@ -65,6 +75,10 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.keySpacePressed ||
         TriggerType.enemyNearPlayer =>
           true,
+        TriggerType.playerEntersWater ||
+        TriggerType.playerExitsWater ||
+        TriggerType.playerFishes =>
+          false,
         _ => false,
       };
 }
@@ -117,6 +131,11 @@ enum ActionType {
   fadeIn,
   fadeOut,
   setAlpha,
+  // Projectile control
+  launchProjectile,
+  stopProjectile,
+  // Particle effects
+  playEffect,
 }
 
 extension ActionTypeExtension on ActionType {
@@ -145,6 +164,9 @@ extension ActionTypeExtension on ActionType {
         ActionType.fadeIn => 'Fade in',
         ActionType.fadeOut => 'Fade out',
         ActionType.setAlpha => 'Set opacity',
+        ActionType.launchProjectile => 'Launch projectile',
+        ActionType.stopProjectile => 'Stop projectile',
+        ActionType.playEffect => 'Play effect',
       };
 
   ActionCategory get category => switch (this) {
@@ -177,6 +199,9 @@ extension ActionTypeExtension on ActionType {
         ActionType.fadeOut ||
         ActionType.setAlpha =>
           ActionCategory.effects,
+        ActionType.launchProjectile => ActionCategory.world,
+        ActionType.stopProjectile => ActionCategory.world,
+        ActionType.playEffect => ActionCategory.effects,
       };
 
   /// Parameter keys this action expects.
@@ -280,6 +305,28 @@ extension ActionTypeExtension on ActionType {
           ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
           ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
         ],
+        ActionType.launchProjectile => [
+          ActionParam('target', ActionParamType.choice, label: 'Launch object',
+              choices: {'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'bomb'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'bomb'),
+          ActionParam('fromObject', ActionParamType.text, label: 'Fire from (object name)', hint: 'launcher'),
+          ActionParam('hideAfter', ActionParamType.text, label: 'Hide after (sec)', hint: '0 = never, e.g. 1.5'),
+          ActionParam('landEffectName', ActionParamType.text, label: 'On land effect (name)', hint: 'leave empty = none'),
+        ],
+        ActionType.stopProjectile => [
+          ActionParam('target', ActionParamType.choice, label: 'Stop object',
+              choices: {'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'bomb'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'bomb'),
+        ],
+        ActionType.playEffect => [
+          ActionParam('effectName', ActionParamType.text, label: 'Effect name', hint: 'MyExplosion'),
+          ActionParam('target', ActionParamType.choice, label: 'Position',
+              choices: {'trigger': 'Trigger Object', 'player': 'Player', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'bomb'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'explosion'),
+        ],
       };
 
   String summarize(Map<String, dynamic> p) => switch (this) {
@@ -364,6 +411,29 @@ extension ActionTypeExtension on ActionType {
             final t = p['target'] as String? ?? 'player';
             final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
             return 'Opacity ${p['value'] ?? '1.0'} ($who)';
+          }(),
+        ActionType.launchProjectile => () {
+            final t = p['target'] as String? ?? 'named';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : '#${p['tag'] ?? ''}';
+            final from = p['fromObject'] as String? ?? '';
+            final hide = double.tryParse(p['hideAfter']?.toString() ?? '') ?? 0.0;
+            final fx = p['landEffectName'] as String? ?? '';
+            final base = from.isNotEmpty ? 'Launch $who from "$from"' : 'Launch $who';
+            final withHide = hide > 0 ? '$base, hide after ${hide}s' : base;
+            return fx.isNotEmpty ? '$withHide → "$fx"' : withHide;
+          }(),
+        ActionType.stopProjectile => () {
+            final t = p['target'] as String? ?? 'named';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : '#${p['tag'] ?? ''}';
+            return 'Stop projectile $who';
+          }(),
+        ActionType.playEffect => () {
+            final fx = p['effectName'] as String? ?? '';
+            final t = p['target'] as String? ?? 'trigger';
+            final where = t == 'named' ? '"${p['objectName'] ?? ''}"'
+                : t == 'tag' ? '#${p['tag'] ?? ''}'
+                : t;
+            return fx.isNotEmpty ? '"$fx" effect @ $where' : 'Effect @ $where';
           }(),
       };
 }

@@ -1,4 +1,5 @@
 import 'dart:math' show max;
+import '../models/game_effect.dart';
 import 'package:flame/camera.dart';
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
@@ -72,7 +73,7 @@ class EditorGame extends FlameGame with ScrollDetector {
 
   // ─── Play Mode ───────────────────────────────────────────────────────────────
 
-  Future<void> startPlay({int viewportWidth = 0, int viewportHeight = 0}) async {
+  Future<void> startPlay({int viewportWidth = 0, int viewportHeight = 0, List<dynamic>? effects, Map<String, String>? keyBindings}) async {
     if (_world == null || _camera == null) return;
     _vpW = viewportWidth;
     _vpH = viewportHeight;
@@ -112,6 +113,7 @@ class EditorGame extends FlameGame with ScrollDetector {
     // Hide editor overlays (save user's grid preference, always hide in play)
     _gridComponent?.showGrid = false;
     _objectsComponent?.hidden = true;
+    _objectsComponent?.stopAllPreviews();
 
     // Save camera state and apply viewport
     _savedCameraPos = _camera!.viewfinder.position.clone();
@@ -139,6 +141,8 @@ class EditorGame extends FlameGame with ScrollDetector {
       mapData: mapData,
       spriteCache: spriteCache,
       rules: List.from(mapData.rules),
+      effects: effects?.cast<GameEffect>() ?? [],
+      keyBindings: keyBindings ?? {},
       onHudUpdate: (h, s) => onHudUpdate?.call(h, s),
       onMessage: (msg) => onMessage?.call(msg),
       onGameEvent: (event) => onGameEvent?.call(event),
@@ -161,6 +165,7 @@ class EditorGame extends FlameGame with ScrollDetector {
     // Restore editor overlays
     _gridComponent?.showGrid = _userShowGrid;
     _objectsComponent?.hidden = false;
+    _objectsComponent?.resetClock();
 
     // Restore objects removed during play (coins picked up, etc.)
     if (_savedObjects != null) {
@@ -380,4 +385,16 @@ class EditorGame extends FlameGame with ScrollDetector {
   void setSelectedObject(String? id) {
     _objectsComponent?.selectedObjectId = id;
   }
+
+  void startProjectilePreview(String id) => _objectsComponent?.startPreview(id);
+  void stopProjectilePreview(String id) => _objectsComponent?.stopPreview(id);
+  bool isProjectilePreviewing(String id) => _objectsComponent?.isPreviewing(id) ?? false;
+
+  void previewEffect(double worldX, double worldY, GameEffect fx) {
+    // Clear any running preview first so effects don't stack
+    _objectsComponent?.stopAllPreviews();
+    _objectsComponent?.spawnEffectPreview(worldX, worldY, fx, mapData.tileSize.toDouble());
+  }
+
+  void clearEffectPreview() => _objectsComponent?.stopAllPreviews();
 }

@@ -1,3 +1,5 @@
+import 'game_effect.dart';
+
 class ProjectMap {
   final String id;
   String name;
@@ -40,6 +42,10 @@ class GameProject {
   Map<String, String> musicPaths; // trackName → relative path
   Map<String, String> sfxPaths;   // sfxName   → relative path
   Map<String, String> fontPaths;  // fontName  → relative path
+  List<GameEffect> effects;
+  /// Key bindings: TriggerType.name → key identifier string (e.g. 'keySpacePressed' → 'e')
+  /// Empty map = use defaults. Only action/custom keys are stored here.
+  Map<String, String> keyBindings;
 
   GameProject({
     this.name = 'Untitled Game',
@@ -59,10 +65,14 @@ class GameProject {
     Map<String, String>? musicPaths,
     Map<String, String>? sfxPaths,
     Map<String, String>? fontPaths,
+    List<GameEffect>? effects,
+    Map<String, String>? keyBindings,
   })  : maps = maps ?? [],
         musicPaths = musicPaths ?? {},
         sfxPaths = sfxPaths ?? {},
-        fontPaths = fontPaths ?? {};
+        fontPaths = fontPaths ?? {},
+        effects = effects ?? [],
+        keyBindings = keyBindings ?? {};
 
   ProjectMap? get startMap => maps.isEmpty
       ? null
@@ -87,6 +97,8 @@ class GameProject {
         'musicPaths': musicPaths,
         'sfxPaths': sfxPaths,
         'fontPaths': fontPaths,
+        'effects': effects.map((e) => e.toJson()).toList(),
+        'keyBindings': keyBindings,
       };
 
   factory GameProject.fromJson(Map<String, dynamic> j) => GameProject(
@@ -110,5 +122,9 @@ class GameProject {
             Map<String, String>.from(j['musicPaths'] as Map? ?? {}),
         sfxPaths: Map<String, String>.from(j['sfxPaths'] as Map? ?? {}),
         fontPaths: Map<String, String>.from(j['fontPaths'] as Map? ?? {}),
+        effects: (j['effects'] as List? ?? [])
+            .map((e) => GameEffect.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        keyBindings: Map<String, String>.from(j['keyBindings'] as Map? ?? {}),
       );
 }

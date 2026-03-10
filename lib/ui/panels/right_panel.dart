@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../editor/editor_state.dart';
 import '../../models/game_object.dart';
+import '../../models/game_effect.dart';
 import '../../models/game_project.dart';
 import '../../models/map_data.dart';
 import '../../models/game_rule.dart';
@@ -35,7 +36,7 @@ class _RightPanelState extends State<RightPanel> {
   }
 
   Widget _buildTabBar() {
-    const tabs = ['Properties', 'Rules', 'Code'];
+    const tabs = ['Properties', 'Rules', 'Effects', 'Code'];
     return Container(
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: AppColors.borderColor)),
@@ -79,7 +80,8 @@ class _RightPanelState extends State<RightPanel> {
     return switch (_selectedTab) {
       0 => _PropertiesTab(editorState: widget.editorState),
       1 => _RulesTab(editorState: widget.editorState),
-      2 => const _CodeTab(),
+      2 => _EffectsTab(editorState: widget.editorState),
+      3 => const _CodeTab(),
       _ => const SizedBox(),
     };
   }
@@ -471,6 +473,54 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
     widget.editorState.notifyMapChanged();
   }
 
+  Widget _buildProjectilePreviewButton(GameObject obj) {
+    final game = widget.editorState.game;
+    final isPreviewing = game.isProjectilePreviewing(obj.id);
+    return GestureDetector(
+      onTap: () {
+        if (isPreviewing) {
+          game.stopProjectilePreview(obj.id);
+        } else {
+          game.startProjectilePreview(obj.id);
+        }
+        setState(() {});
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isPreviewing
+              ? const Color(0xFFEF4444).withOpacity(0.18)
+              : const Color(0xFF6C63FF).withOpacity(0.18),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isPreviewing
+                ? const Color(0xFFEF4444).withOpacity(0.5)
+                : const Color(0xFF6C63FF).withOpacity(0.5),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isPreviewing ? Icons.stop : Icons.play_arrow,
+              size: 14,
+              color: isPreviewing ? const Color(0xFFEF4444) : const Color(0xFF6C63FF),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              isPreviewing ? 'Stop Preview' : 'Preview Path',
+              style: TextStyle(
+                fontSize: 11,
+                color: isPreviewing ? const Color(0xFFEF4444) : const Color(0xFF6C63FF),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _setDashAngle(double v) {
     setState(() => widget.obj.dashAngle = v % 360);
     widget.editorState.notifyMapChanged();
@@ -659,6 +709,11 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
           }),
           if (obj.projectileEnabled) ...[
             const SizedBox(height: 4),
+            _checkboxRow('Loop', obj.projectileLoop, () {
+              setState(() => obj.projectileLoop = !obj.projectileLoop);
+              widget.editorState.notifyMapChanged();
+            }),
+            const SizedBox(height: 4),
             _transformRow(
               label: 'Angle',
               display: '${obj.projectileAngle.toStringAsFixed(0)}°',
@@ -681,11 +736,13 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
             ),
             const SizedBox(height: 4),
             _transformRow(
-              label: 'Arc',
+              label: 'Height',
               display: '${obj.projectileArc.toStringAsFixed(1)} t',
               onDecrement: () => _setProjectileArc(obj.projectileArc - 0.5),
               onIncrement: () => _setProjectileArc(obj.projectileArc + 0.5),
             ),
+            const SizedBox(height: 6),
+            _buildProjectilePreviewButton(obj),
           ],
           const SizedBox(height: 6),
           // Dash
@@ -797,6 +854,110 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
               onChanged: (v) => _set('targetX', v)),
           _numField('Spawn Y', obj.properties['targetY'] ?? 0,
               onChanged: (v) => _set('targetY', v)),
+        ];
+      case GameObjectType.waterBody:
+        final mode = obj.properties['waterMode'] as String? ?? 'wade';
+        final flow = obj.properties['flowDirection'] as String? ?? 'none';
+        final animStyle = obj.properties['animStyle'] as String? ?? 'ripple';
+        final color = obj.properties['waterColor'] as String? ?? 'blue';
+        final canFish = obj.properties['canFish'] as bool? ?? false;
+        final damaging = obj.properties['damaging'] as bool? ?? false;
+        final opacity = (obj.properties['opacity'] as num?)?.toDouble() ?? 0.6;
+        final flowStr = (obj.properties['flowStrength'] as num?)?.toDouble() ?? 1.0;
+        final dps = (obj.properties['damagePerSecond'] as num?)?.toDouble() ?? 1.0;
+        final fishDensity = obj.properties['fishDensity'] as int? ?? 3;
+        return [
+          _label('INTERACTION'),
+          const SizedBox(height: 4),
+          DropdownButtonFormField<String>(
+            value: mode,
+            dropdownColor: AppColors.surfaceBg,
+            style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
+            decoration: _inputDeco(),
+            items: const [
+              DropdownMenuItem(value: 'block', child: Text('Block (solid wall)')),
+              DropdownMenuItem(value: 'wade',  child: Text('Wade (50% speed)')),
+              DropdownMenuItem(value: 'swim',  child: Text('Swim (70% speed)')),
+              DropdownMenuItem(value: 'boat',  child: Text('Boat (120% speed)')),
+            ],
+            onChanged: (v) => _set('waterMode', v ?? 'wade'),
+          ),
+          const SizedBox(height: 10),
+          _label('FLOW'),
+          const SizedBox(height: 4),
+          DropdownButtonFormField<String>(
+            value: flow,
+            dropdownColor: AppColors.surfaceBg,
+            style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
+            decoration: _inputDeco(),
+            items: const [
+              DropdownMenuItem(value: 'none', child: Text('No flow')),
+              DropdownMenuItem(value: 'N',    child: Text('North ↑')),
+              DropdownMenuItem(value: 'S',    child: Text('South ↓')),
+              DropdownMenuItem(value: 'E',    child: Text('East →')),
+              DropdownMenuItem(value: 'W',    child: Text('West ←')),
+            ],
+            onChanged: (v) => _set('flowDirection', v ?? 'none'),
+          ),
+          if (flow != 'none') ...[
+            const SizedBox(height: 6),
+            _numField('Strength', flowStr, isDecimal: true,
+                onChanged: (v) => _set('flowStrength', v)),
+          ],
+          const SizedBox(height: 10),
+          _label('VISUAL'),
+          const SizedBox(height: 4),
+          DropdownButtonFormField<String>(
+            value: animStyle,
+            dropdownColor: AppColors.surfaceBg,
+            style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
+            decoration: _inputDeco(),
+            items: const [
+              DropdownMenuItem(value: 'still',  child: Text('Still')),
+              DropdownMenuItem(value: 'ripple', child: Text('Ripple')),
+              DropdownMenuItem(value: 'flow',   child: Text('Flow')),
+              DropdownMenuItem(value: 'waves',  child: Text('Waves')),
+            ],
+            onChanged: (v) => _set('animStyle', v ?? 'ripple'),
+          ),
+          const SizedBox(height: 6),
+          DropdownButtonFormField<String>(
+            value: color,
+            dropdownColor: AppColors.surfaceBg,
+            style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
+            decoration: _inputDeco(),
+            items: const [
+              DropdownMenuItem(value: 'blue',  child: Text('Blue (ocean/lake)')),
+              DropdownMenuItem(value: 'green', child: Text('Green (swamp)')),
+              DropdownMenuItem(value: 'brown', child: Text('Brown (muddy)')),
+              DropdownMenuItem(value: 'red',   child: Text('Red (lava/blood)')),
+            ],
+            onChanged: (v) => _set('waterColor', v ?? 'blue'),
+          ),
+          const SizedBox(height: 6),
+          _transformRow(
+            label: 'Opacity',
+            display: '${(opacity * 100).round()}%',
+            onDecrement: () => _set('opacity', (opacity - 0.05).clamp(0.1, 1.0)),
+            onIncrement: () => _set('opacity', (opacity + 0.05).clamp(0.1, 1.0)),
+          ),
+          const SizedBox(height: 10),
+          _label('FISHING'),
+          const SizedBox(height: 4),
+          _checkboxRow('Can fish here', canFish, () => _set('canFish', !canFish)),
+          if (canFish) ...[
+            const SizedBox(height: 6),
+            _numField('Fish density', fishDensity, onChanged: (v) => _set('fishDensity', v)),
+          ],
+          const SizedBox(height: 10),
+          _label('HAZARD'),
+          const SizedBox(height: 4),
+          _checkboxRow('Damages player', damaging, () => _set('damaging', !damaging)),
+          if (damaging) ...[
+            const SizedBox(height: 6),
+            _numField('Damage/sec', dps, isDecimal: true,
+                onChanged: (v) => _set('damagePerSecond', v)),
+          ],
         ];
       case GameObjectType.playerSpawn:
         return [];
@@ -966,6 +1127,37 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
                     fontWeight: FontWeight.w600),
               ),
             ),
+          ],
+        ),
+      );
+
+  Widget _checkboxRow(String label, bool checked, VoidCallback onToggle) =>
+      GestureDetector(
+        onTap: onToggle,
+        behavior: HitTestBehavior.opaque,
+        child: Row(
+          children: [
+            Container(
+              width: 14,
+              height: 14,
+              decoration: BoxDecoration(
+                color: checked ? AppColors.accent : AppColors.surfaceBg,
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(
+                  color: checked ? AppColors.accent : AppColors.borderColor,
+                  width: 1.5,
+                ),
+              ),
+              child: checked
+                  ? const Icon(Icons.check, size: 10, color: Colors.white)
+                  : null,
+            ),
+            const SizedBox(width: 8),
+            Text(label,
+                style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600)),
           ],
         ),
       );
@@ -1200,6 +1392,8 @@ class _RulesTabState extends State<_RulesTab> {
     final rule = await RuleEditorDialog.show(
       context,
       availableMaps: widget.editorState.project.maps,
+      availableEffects: widget.editorState.project.effects,
+      keyBindings: widget.editorState.project.keyBindings,
     );
     if (rule != null) {
       setState(() => _rules.add(rule));
@@ -1212,6 +1406,8 @@ class _RulesTabState extends State<_RulesTab> {
       context,
       existing: _rules[index],
       availableMaps: widget.editorState.project.maps,
+      availableEffects: widget.editorState.project.effects,
+      keyBindings: widget.editorState.project.keyBindings,
     );
     if (rule != null) setState(() => _rules[index] = rule);
   }
@@ -1501,6 +1697,8 @@ class _RulesManagerDialogState extends State<_RulesManagerDialog> {
     final rule = await RuleEditorDialog.show(
       context,
       availableMaps: widget.editorState.project.maps,
+      availableEffects: widget.editorState.project.effects,
+      keyBindings: widget.editorState.project.keyBindings,
     );
     if (rule != null && mounted) setState(() => _rules.add(rule));
   }
@@ -1511,6 +1709,8 @@ class _RulesManagerDialogState extends State<_RulesManagerDialog> {
       context,
       existing: _rules[index],
       availableMaps: widget.editorState.project.maps,
+      availableEffects: widget.editorState.project.effects,
+      keyBindings: widget.editorState.project.keyBindings,
     );
     if (rule != null && mounted) setState(() => _rules[index] = rule);
   }
@@ -2227,6 +2427,777 @@ class _CopyRulesDialogState extends State<_CopyRulesDialog> {
           ),
         ],
       );
+}
+
+// ─── Effects Tab ──────────────────────────────────────────────────────────────
+
+class _EffectsTab extends StatefulWidget {
+  final EditorState editorState;
+  const _EffectsTab({required this.editorState});
+
+  @override
+  State<_EffectsTab> createState() => _EffectsTabState();
+}
+
+class _EffectsTabState extends State<_EffectsTab> {
+  List<GameEffect> get _effects => widget.editorState.project.effects;
+
+  // null = list view; int = editing that index; -1 = adding new
+  int? _editingIndex;
+
+  static const _typeEmojis = {
+    'blast': '💥',
+    'fire': '🔥',
+    'snow': '❄',
+    'electric': '⚡',
+    'smoke': '💨',
+  };
+
+  void _startAdd() {
+    _effects.add(GameEffect(name: 'Effect ${_effects.length + 1}'));
+    setState(() => _editingIndex = _effects.length - 1);
+    widget.editorState.notifyProjectChanged();
+  }
+
+  void _startEdit(int index) => setState(() => _editingIndex = index);
+
+  void _deleteEffect(int index) {
+    if (_editingIndex == index) _editingIndex = null;
+    setState(() => _effects.removeAt(index));
+    widget.editorState.notifyProjectChanged();
+  }
+
+  void _onEditorCancel(int index) {
+    // If this was a brand-new effect that was never saved, remove it
+    setState(() => _editingIndex = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_editingIndex != null) {
+      final idx = _editingIndex!;
+      if (idx < _effects.length) {
+        return _InlineEffectEditor(
+          key: ValueKey(idx),
+          effect: _effects[idx],
+          editorState: widget.editorState,
+          onSave: (updated) {
+            setState(() {
+              _effects[idx] = updated;
+              _editingIndex = null;
+            });
+            widget.editorState.notifyProjectChanged();
+          },
+          onCancel: () => _onEditorCancel(idx),
+        );
+      }
+      _editingIndex = null;
+    }
+
+    // ── List view ──
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: AppColors.borderColor)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.auto_awesome, size: 13, color: AppColors.textSecondary),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text('Saved Effects',
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 11,
+                        fontWeight: FontWeight.w600, letterSpacing: 0.4)),
+              ),
+              GestureDetector(
+                onTap: _startAdd,
+                child: const Icon(Icons.add_circle_outline, size: 16, color: AppColors.accent),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _effects.isEmpty
+              ? const Center(
+                  child: Text('No effects saved.\nTap + to add one.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  itemCount: _effects.length,
+                  separatorBuilder: (_, __) =>
+                      const Divider(height: 1, color: AppColors.borderColor),
+                  itemBuilder: (_, i) {
+                    final fx = _effects[i];
+                    final emoji = _typeEmojis[fx.type] ?? '✨';
+                    final subtitle = switch (fx.type) {
+                      'blast' => '${fx.blastColor} blast · ${fx.count}p · r${fx.radius} · ${fx.duration}s',
+                      'fire' => 'fire · intensity ${fx.intensity} · spread ${fx.spread}t · ${fx.duration < 0 ? "loop" : "${fx.duration}s"}',
+                      'snow' => 'snow · density ${fx.intensity} · area ${fx.spread}t · ${fx.duration < 0 ? "loop" : "${fx.duration}s"}',
+                      'electric' => 'electric · ${fx.intensity} arcs · range ${fx.spread}t · ${fx.duration}s',
+                      'smoke' => 'smoke · density ${fx.intensity} · spread ${fx.spread}t · ${fx.duration < 0 ? "loop" : "${fx.duration}s"}',
+                      _ => fx.type,
+                    };
+                    return ListTile(
+                      dense: true,
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                      leading: Text(emoji, style: const TextStyle(fontSize: 18)),
+                      title: Text(fx.name,
+                          style: const TextStyle(
+                              color: AppColors.textPrimary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500)),
+                      subtitle: Text(
+                        subtitle,
+                        style: const TextStyle(color: AppColors.textMuted, fontSize: 10),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          GestureDetector(
+                            onTap: () => _startEdit(i),
+                            child: const Icon(Icons.edit_outlined,
+                                size: 15, color: AppColors.textSecondary),
+                          ),
+                          const SizedBox(width: 10),
+                          GestureDetector(
+                            onTap: () => _deleteEffect(i),
+                            child: const Icon(Icons.delete_outline,
+                                size: 15, color: AppColors.textMuted),
+                          ),
+                        ],
+                      ),
+                      onTap: () => _startEdit(i),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Inline Effect Editor (no dialog — lives inside the panel) ─────────────────
+
+class _InlineEffectEditor extends StatefulWidget {
+  final GameEffect effect;
+  final EditorState editorState;
+  final void Function(GameEffect) onSave;
+  final VoidCallback onCancel;
+
+  const _InlineEffectEditor({
+    super.key,
+    required this.effect,
+    required this.editorState,
+    required this.onSave,
+    required this.onCancel,
+  });
+
+  @override
+  State<_InlineEffectEditor> createState() => _InlineEffectEditorState();
+}
+
+class _InlineEffectEditorState extends State<_InlineEffectEditor> {
+  late final TextEditingController _nameCtrl;
+  late String _type;
+  // Blast
+  late String _blastColor;
+  late int _count;
+  late int _radius;
+  // Shared
+  late int _intensity;
+  late int _spread;
+  late double _speed;
+  late double _duration;
+  late double _particleSize;
+  late int _maxParticles;
+  bool _loop = false;
+
+  // (id, icon, label, accent color)
+  static const _types = [
+    ('blast', Icons.flare,                  'Blast',    Color(0xFFFF7043)),
+    ('fire',  Icons.local_fire_department,  'Fire',     Color(0xFFFF6B00)),
+    ('snow',  Icons.ac_unit,                'Snow',     Color(0xFF64B5F6)),
+    ('electric', Icons.bolt,               'Electric', Color(0xFFFFEE58)),
+    ('smoke', Icons.cloud,                  'Smoke',    Color(0xFF90A4AE)),
+  ];
+
+  // (id, swatch color, label) — shown as colored circle
+  static const _blastColors = [
+    ('fire',     Color(0xFFFF5722), 'Orange'),
+    ('ice',      Color(0xFF29B6F6), 'Blue'),
+    ('electric', Color(0xFFFFEE58), 'Yellow'),
+    ('smoke',    Color(0xFF90A4AE), 'Gray'),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final fx = widget.effect;
+    _nameCtrl = TextEditingController(text: fx.name);
+    _type = fx.type;
+    _blastColor = fx.blastColor;
+    _count = fx.count;
+    _radius = fx.radius;
+    _intensity = fx.intensity;
+    _spread = fx.spread;
+    _speed = fx.speed;
+    _particleSize = fx.particleSize;
+    _maxParticles = fx.maxParticles;
+    _duration = fx.duration < 0 ? 3.0 : fx.duration;
+    _loop = fx.duration < 0;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
+  void _preview() {
+    final md = widget.editorState.mapData;
+    final ts = md.tileSize.toDouble();
+    final worldX = md.width * ts / 2;
+    final worldY = md.height * ts / 2;
+    widget.editorState.game.previewEffect(worldX, worldY, _buildEffect());
+  }
+
+  GameEffect _buildEffect() {
+    final name = _nameCtrl.text.trim().isEmpty ? 'Effect' : _nameCtrl.text.trim();
+    return GameEffect(
+      name: name,
+      type: _type,
+      duration: _loop ? -1 : _duration,
+      blastColor: _blastColor,
+      count: _count,
+      radius: _radius,
+      intensity: _intensity,
+      spread: _spread,
+      speed: _speed,
+      particleSize: _particleSize,
+      maxParticles: _maxParticles,
+    );
+  }
+
+  void _save() => widget.onSave(_buildEffect());
+
+  Widget _row({
+    required String label,
+    required String display,
+    required VoidCallback onDecrement,
+    required VoidCallback onIncrement,
+  }) =>
+      Row(
+        children: [
+          SizedBox(
+            width: 72,
+            child: Text(label,
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+          ),
+          GestureDetector(
+            onTap: onDecrement,
+            child: Container(
+              width: 24, height: 24,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceBg,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: AppColors.borderColor),
+              ),
+              child: const Icon(Icons.remove, size: 12, color: AppColors.textSecondary),
+            ),
+          ),
+          Expanded(
+            child: Text(display,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: AppColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w500)),
+          ),
+          GestureDetector(
+            onTap: onIncrement,
+            child: Container(
+              width: 24, height: 24,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceBg,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: AppColors.borderColor),
+              ),
+              child: const Icon(Icons.add, size: 12, color: AppColors.textSecondary),
+            ),
+          ),
+        ],
+      );
+
+  Widget _label(String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(text,
+            style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.5)),
+      );
+
+  // Chip row for effect types — shows a colored Material icon
+  Widget _typeChipRow(
+      List<(String, IconData, String, Color)> items,
+      String selected,
+      void Function(String) onSelect) {
+    return Row(
+      children: items.map((item) {
+        final (id, icon, label, color) = item;
+        final sel = selected == id;
+        return Expanded(
+          child: GestureDetector(
+            onTap: () => setState(() => onSelect(id)),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 100),
+              margin: const EdgeInsets.only(right: 3),
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              decoration: BoxDecoration(
+                color: sel ? color.withOpacity(0.18) : AppColors.surfaceBg,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: sel ? color : AppColors.borderColor, width: sel ? 1.5 : 1),
+              ),
+              child: Column(
+                children: [
+                  Icon(icon, size: 14, color: sel ? color : AppColors.textMuted),
+                  const SizedBox(height: 2),
+                  Text(label,
+                      style: TextStyle(
+                          color: sel ? color : AppColors.textMuted,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  // Chip row for blast color swatches — shows a filled color circle
+  Widget _colorChipRow(
+      List<(String, Color, String)> items,
+      String selected,
+      void Function(String) onSelect) {
+    return Row(
+      children: items.map((item) {
+        final (id, swatch, label) = item;
+        final sel = selected == id;
+        return Expanded(
+          child: GestureDetector(
+            onTap: () => setState(() => onSelect(id)),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 100),
+              margin: const EdgeInsets.only(right: 3),
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              decoration: BoxDecoration(
+                color: sel ? swatch.withOpacity(0.15) : AppColors.surfaceBg,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: sel ? swatch : AppColors.borderColor, width: sel ? 1.5 : 1),
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    width: 14, height: 14,
+                    decoration: BoxDecoration(
+                      color: swatch,
+                      shape: BoxShape.circle,
+                      boxShadow: sel
+                          ? [BoxShadow(color: swatch.withOpacity(0.5), blurRadius: 4)]
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(label,
+                      style: TextStyle(
+                          color: sel ? swatch : AppColors.textMuted,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _sizeRow(String label) => _row(
+        label: label,
+        display: _particleSize.toStringAsFixed(1),
+        onDecrement: () =>
+            setState(() => _particleSize = (_particleSize - 0.1).clamp(0.3, 4.0)),
+        onIncrement: () =>
+            setState(() => _particleSize = (_particleSize + 0.1).clamp(0.3, 4.0)),
+      );
+
+  Widget _maxParticlesRow() => _row(
+        label: 'Max Parts.',
+        display: '$_maxParticles',
+        onDecrement: () =>
+            setState(() => _maxParticles = (_maxParticles - 10).clamp(10, 1000)),
+        onIncrement: () =>
+            setState(() => _maxParticles = (_maxParticles + 10).clamp(10, 1000)),
+      );
+
+  List<Widget> _typeSettings() {
+    switch (_type) {
+      case 'blast':
+        return [
+          _label('COLOR'),
+          _colorChipRow(_blastColors, _blastColor, (v) => _blastColor = v),
+          const SizedBox(height: 12),
+          _row(
+            label: 'Particles',
+            display: '$_count',
+            onDecrement: () => setState(() => _count = (_count - 5).clamp(5, 200)),
+            onIncrement: () => setState(() => _count = (_count + 5).clamp(5, 200)),
+          ),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Radius (t)',
+            display: '$_radius',
+            onDecrement: () => setState(() => _radius = (_radius - 1).clamp(1, 20)),
+            onIncrement: () => setState(() => _radius = (_radius + 1).clamp(1, 20)),
+          ),
+          const SizedBox(height: 8),
+          _sizeRow('Particle Size'),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Duration',
+            display: '${_duration.toStringAsFixed(1)}s',
+            onDecrement: () =>
+                setState(() => _duration = (_duration - 0.1).clamp(0.1, 10.0)),
+            onIncrement: () =>
+                setState(() => _duration = (_duration + 0.1).clamp(0.1, 10.0)),
+          ),
+        ];
+
+      case 'fire':
+        return [
+          _row(
+            label: 'Intensity',
+            display: '$_intensity',
+            onDecrement: () => setState(() => _intensity = (_intensity - 1).clamp(1, 10)),
+            onIncrement: () => setState(() => _intensity = (_intensity + 1).clamp(1, 10)),
+          ),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Width (t)',
+            display: '$_spread',
+            onDecrement: () => setState(() => _spread = (_spread - 1).clamp(1, 20)),
+            onIncrement: () => setState(() => _spread = (_spread + 1).clamp(1, 20)),
+          ),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Rise Speed',
+            display: '${_speed.toStringAsFixed(1)} t/s',
+            onDecrement: () => setState(() => _speed = (_speed - 0.5).clamp(0.5, 20.0)),
+            onIncrement: () => setState(() => _speed = (_speed + 0.5).clamp(0.5, 20.0)),
+          ),
+          const SizedBox(height: 8),
+          _sizeRow('Flame Size'),
+          const SizedBox(height: 8),
+          _maxParticlesRow(),
+          ..._durationRow(),
+        ];
+
+      case 'snow':
+        return [
+          _row(
+            label: 'Density',
+            display: '$_intensity',
+            onDecrement: () => setState(() => _intensity = (_intensity - 1).clamp(1, 10)),
+            onIncrement: () => setState(() => _intensity = (_intensity + 1).clamp(1, 10)),
+          ),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Area (t)',
+            display: '$_spread',
+            onDecrement: () => setState(() => _spread = (_spread - 1).clamp(1, 30)),
+            onIncrement: () => setState(() => _spread = (_spread + 1).clamp(1, 30)),
+          ),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Fall Speed',
+            display: '${_speed.toStringAsFixed(1)} t/s',
+            onDecrement: () => setState(() => _speed = (_speed - 0.5).clamp(0.5, 20.0)),
+            onIncrement: () => setState(() => _speed = (_speed + 0.5).clamp(0.5, 20.0)),
+          ),
+          const SizedBox(height: 8),
+          _sizeRow('Flake Size'),
+          const SizedBox(height: 8),
+          _maxParticlesRow(),
+          ..._durationRow(),
+        ];
+
+      case 'electric':
+        return [
+          _row(
+            label: 'Arc Count',
+            display: '$_intensity',
+            onDecrement: () => setState(() => _intensity = (_intensity - 1).clamp(1, 12)),
+            onIncrement: () => setState(() => _intensity = (_intensity + 1).clamp(1, 12)),
+          ),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Range (t)',
+            display: '$_spread',
+            onDecrement: () => setState(() => _spread = (_spread - 1).clamp(1, 20)),
+            onIncrement: () => setState(() => _spread = (_spread + 1).clamp(1, 20)),
+          ),
+          const SizedBox(height: 8),
+          _sizeRow('Arc Thickness'),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Duration',
+            display: '${_duration.toStringAsFixed(2)}s',
+            onDecrement: () =>
+                setState(() => _duration = (_duration - 0.05).clamp(0.1, 2.0)),
+            onIncrement: () =>
+                setState(() => _duration = (_duration + 0.05).clamp(0.1, 2.0)),
+          ),
+        ];
+
+      case 'smoke':
+        return [
+          _row(
+            label: 'Density',
+            display: '$_intensity',
+            onDecrement: () => setState(() => _intensity = (_intensity - 1).clamp(1, 10)),
+            onIncrement: () => setState(() => _intensity = (_intensity + 1).clamp(1, 10)),
+          ),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Spread (t)',
+            display: '$_spread',
+            onDecrement: () => setState(() => _spread = (_spread - 1).clamp(1, 20)),
+            onIncrement: () => setState(() => _spread = (_spread + 1).clamp(1, 20)),
+          ),
+          const SizedBox(height: 8),
+          _row(
+            label: 'Rise Speed',
+            display: '${_speed.toStringAsFixed(1)} t/s',
+            onDecrement: () => setState(() => _speed = (_speed - 0.5).clamp(0.5, 10.0)),
+            onIncrement: () => setState(() => _speed = (_speed + 0.5).clamp(0.5, 10.0)),
+          ),
+          const SizedBox(height: 8),
+          _sizeRow('Puff Size'),
+          const SizedBox(height: 8),
+          _maxParticlesRow(),
+          ..._durationRow(),
+        ];
+
+      default:
+        return [];
+    }
+  }
+
+  List<Widget> _durationRow() => [
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            SizedBox(
+              width: 72,
+              child: Text(_loop ? 'Duration' : 'Duration',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+            ),
+            GestureDetector(
+              onTap: _loop ? null : () => setState(() => _duration = (_duration - 0.5).clamp(0.5, 60.0)),
+              child: Container(
+                width: 24, height: 24,
+                decoration: BoxDecoration(
+                  color: _loop ? AppColors.panelBg : AppColors.surfaceBg,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: AppColors.borderColor),
+                ),
+                child: Icon(Icons.remove, size: 12,
+                    color: _loop ? AppColors.textMuted : AppColors.textSecondary),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                _loop ? 'loop' : '${_duration.toStringAsFixed(1)}s',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: _loop ? AppColors.textMuted : AppColors.textPrimary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500),
+              ),
+            ),
+            GestureDetector(
+              onTap: _loop ? null : () => setState(() => _duration = (_duration + 0.5).clamp(0.5, 60.0)),
+              child: Container(
+                width: 24, height: 24,
+                decoration: BoxDecoration(
+                  color: _loop ? AppColors.panelBg : AppColors.surfaceBg,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: AppColors.borderColor),
+                ),
+                child: Icon(Icons.add, size: 12,
+                    color: _loop ? AppColors.textMuted : AppColors.textSecondary),
+              ),
+            ),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: () {
+                setState(() => _loop = !_loop);
+                // Stop running preview when loop is turned off
+                if (!_loop) widget.editorState.game.clearEffectPreview();
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _loop ? AppColors.accent.withOpacity(0.2) : AppColors.surfaceBg,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                      color: _loop ? AppColors.accent.withOpacity(0.6) : AppColors.borderColor),
+                ),
+                child: Text('Loop',
+                    style: TextStyle(
+                        fontSize: 9,
+                        color: _loop ? AppColors.accent : AppColors.textMuted,
+                        fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ],
+        ),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // Header
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: AppColors.borderColor)),
+          ),
+          child: Row(
+            children: [
+              GestureDetector(
+                onTap: widget.onCancel,
+                child: const Icon(Icons.arrow_back_ios, size: 13,
+                    color: AppColors.textSecondary),
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.auto_awesome, size: 13, color: AppColors.accent),
+              const SizedBox(width: 5),
+              const Expanded(
+                child: Text('Edit Effect',
+                    style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        ),
+        // Form
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.all(12),
+            children: [
+              // Name field
+              TextField(
+                controller: _nameCtrl,
+                style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
+                decoration: InputDecoration(
+                  labelText: 'Name',
+                  labelStyle:
+                      const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                  filled: true,
+                  fillColor: AppColors.surfaceBg,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: AppColors.borderColor)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: AppColors.borderColor)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: AppColors.accent)),
+                ),
+              ),
+              const SizedBox(height: 14),
+              // Effect type selector
+              _label('EFFECT TYPE'),
+              _typeChipRow(_types, _type, (v) {
+                _type = v;
+                // Reset loop for types that don't support it
+                if (v == 'blast' || v == 'electric') _loop = false;
+              }),
+              const SizedBox(height: 14),
+              // Type-specific settings
+              ..._typeSettings(),
+              const SizedBox(height: 14),
+              // Preview button
+              SizedBox(
+                width: double.infinity,
+                child: TextButton.icon(
+                  onPressed: _preview,
+                  icon: const Icon(Icons.play_circle_outline, size: 15),
+                  label: const Text('Preview in Editor',
+                      style: TextStyle(fontSize: 12)),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    backgroundColor: const Color(0xFF7C4DFF),
+                    padding: const EdgeInsets.symmetric(vertical: 9),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(7)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // Save / Cancel
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: widget.onCancel,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.textSecondary,
+                        side: const BorderSide(color: AppColors.borderColor),
+                        padding: const EdgeInsets.symmetric(vertical: 9),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(7)),
+                      ),
+                      child: const Text('Cancel', style: TextStyle(fontSize: 12)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _save,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.accent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 9),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(7)),
+                      ),
+                      child: const Text('Save', style: TextStyle(fontSize: 12)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 // ─── Code Tab ─────────────────────────────────────────────────────────────────
