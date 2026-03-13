@@ -20,6 +20,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> with WindowListener {
   late final EditorState _editorState;
+  double _leftWidth = 200;
 
   @override
   void initState() {
@@ -164,8 +165,12 @@ class _AppShellState extends State<AppShell> with WindowListener {
             // Each panel hides itself individually so GameWidget is never remounted.
             child: Row(
               children: [
-                _hiddenInPlay(LeftPanel(editorState: _editorState)),
-                _hiddenInPlay(Container(width: 1, color: AppColors.borderColor)),
+                _hiddenInPlay(LeftPanel(editorState: _editorState, width: _leftWidth)),
+                _hiddenInPlay(_ResizeHandle(
+                  onDrag: (dx) => setState(() {
+                    _leftWidth = (_leftWidth + dx).clamp(150.0, 400.0);
+                  }),
+                )),
                 Expanded(child: CenterCanvas(editorState: _editorState)),
                 _hiddenInPlay(Container(width: 1, color: AppColors.borderColor)),
                 _hiddenInPlay(RightPanel(editorState: _editorState)),
@@ -174,6 +179,40 @@ class _AppShellState extends State<AppShell> with WindowListener {
           ),
           _hiddenInPlay(StatusBar(editorState: _editorState)),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Resizable panel handle ───────────────────────────────────────────────────
+
+class _ResizeHandle extends StatefulWidget {
+  final void Function(double dx) onDrag;
+  const _ResizeHandle({required this.onDrag});
+
+  @override
+  State<_ResizeHandle> createState() => _ResizeHandleState();
+}
+
+class _ResizeHandleState extends State<_ResizeHandle> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragUpdate: (d) => widget.onDrag(d.delta.dx),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 5,
+          color: _hovering
+              ? AppColors.accent.withOpacity(0.5)
+              : AppColors.borderColor,
+        ),
       ),
     );
   }

@@ -23,6 +23,9 @@ class _CenterCanvasState extends State<CenterCanvas> {
   bool _isPainting = false;
   bool _isErasing = false;
   Offset _lastPanPos = Offset.zero;
+  Offset? _rectStart;   // screen pos where rectangle fill drag began
+  Offset? _rectCurrent; // current drag pos (for preview)
+  bool _lastRectErase = false;
 
   // HUD state (updated by game callbacks)
   int _health = 100;
@@ -225,6 +228,25 @@ class _CenterCanvasState extends State<CenterCanvas> {
         _isErasing = true;
         _game.paintTile(e.localPosition, TileType.empty);
       }
+    } else if (tool == EditorTool.fill) {
+      if (e.buttons == kPrimaryMouseButton) {
+        _state.pushUndo();
+        _game.floodFill(e.localPosition, _state.selectedTile.value,
+            variant: _state.selectedTileVariant.value);
+        _state.notifyMapChanged();
+      } else if (e.buttons == kSecondaryMouseButton) {
+        _state.pushUndo();
+        _game.floodFill(e.localPosition, TileType.empty);
+        _state.notifyMapChanged();
+      }
+    } else if (tool == EditorTool.rect) {
+      if (e.buttons == kPrimaryMouseButton) {
+        _rectStart = e.localPosition;
+        _lastRectErase = false;
+      } else if (e.buttons == kSecondaryMouseButton) {
+        _rectStart = e.localPosition;
+        _lastRectErase = true;
+      }
     } else if (tool == EditorTool.collision) {
       _state.pushUndo();
       if (e.buttons == kPrimaryMouseButton) {
@@ -270,10 +292,27 @@ class _CenterCanvasState extends State<CenterCanvas> {
     if (_isErasing) {
       _game.paintTile(e.localPosition, TileType.empty);
     }
+    if (_rectStart != null) {
+      setState(() => _rectCurrent = e.localPosition);
+    }
     _state.hoverTile.value = _game.screenToTile(e.localPosition);
   }
 
   void _onPointerUp(PointerUpEvent e) {
+    if (_rectStart != null && _state.activeTool.value == EditorTool.rect) {
+      _state.pushUndo();
+      if (_lastRectErase) {
+        _game.fillRect(_rectStart!, e.localPosition, TileType.empty);
+      } else {
+        _game.fillRect(_rectStart!, e.localPosition, _state.selectedTile.value,
+            variant: _state.selectedTileVariant.value);
+      }
+      _state.notifyMapChanged();
+      setState(() {
+        _rectStart = null;
+        _rectCurrent = null;
+      });
+    }
     _isPanning = false;
     _isPainting = false;
     _isErasing = false;
@@ -283,6 +322,10 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _isPanning = false;
     _isPainting = false;
     _isErasing = false;
+    setState(() {
+      _rectStart = null;
+      _rectCurrent = null;
+    });
     _state.hoverTile.value = null;
   }
 
@@ -297,6 +340,10 @@ class _CenterCanvasState extends State<CenterCanvas> {
           onPointerUp: _onPointerUp,
           onPointerCancel: (_) {
             _isPanning = _isPainting = _isErasing = false;
+            setState(() {
+              _rectStart = null;
+              _rectCurrent = null;
+            });
             _state.hoverTile.value = null;
           },
           child: MouseRegion(
@@ -373,6 +420,20 @@ class _CenterCanvasState extends State<CenterCanvas> {
                               ),
                             ),
                         ],
+
+                        // ── Rectangle fill preview ────────────
+                        if (!isPlay && _rectStart != null && _rectCurrent != null)
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: CustomPaint(
+                                painter: _RectPreviewPainter(
+                                  game: _game,
+                                  start: _rectStart!,
+                                  end: _rectCurrent!,
+                                ),
+                              ),
+                            ),
+                          ),
 
                         // ── Editor zoom controls ──────────────
                         if (!isPlay)
@@ -588,4 +649,54 @@ class _ZoomControlsState extends State<_ZoomControls> {
           child: Icon(icon, size: 14, color: AppColors.textSecondary),
         ),
       );
+}
+
+// ─── Rectangle Fill Preview Painter ──────────────────────────────────────────
+
+class _RectPreviewPainter extends CustomPainter {
+  final EditorGame game;
+  final Offset start;
+  final Offset end;
+
+  const _RectPreviewPainter({
+    required this.game,
+    required this.start,
+    required this.end,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = game.screenToTile(start);
+    final b = game.screenToTile(end);
+    if (a == null || b == null) return;
+
+    final minX = a.$1 < b.$1 ? a.$1 : b.$1;
+    final maxX = a.$1 < b.$1 ? b.$1 : a.$1;
+    final minY = a.$2 < b.$2 ? a.$2 : b.$2;
+    final maxY = a.$2 < b.$2 ? b.$2 : a.$2;
+
+    final topLeft = game.tileToScreen(minX, minY);
+    final bottomRight = game.tileToScreen(maxX + 1, maxY + 1);
+    if (topLeft == null || bottomRight == null) return;
+
+    final rect = Rect.fromPoints(topLeft, bottomRight);
+
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..color = const Color(0xFF60A5FA).withOpacity(0.12)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..color = const Color(0xFF60A5FA).withOpacity(0.85)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_RectPreviewPainter old) =>
+      old.start != start || old.end != end;
 }

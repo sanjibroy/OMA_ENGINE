@@ -305,12 +305,41 @@ class EditorGame extends FlameGame with ScrollDetector {
     return (tx, ty);
   }
 
+  /// Converts tile grid coords to canvas screen position (top-left of that tile).
+  Offset? tileToScreen(int tx, int ty) {
+    if (_camera == null) return null;
+    final cam = _camera!;
+    final worldX = tx * mapData.tileSize.toDouble();
+    final worldY = ty * mapData.tileSize.toDouble();
+    return Offset(
+      (worldX - cam.viewfinder.position.x) * cam.viewfinder.zoom,
+      (worldY - cam.viewfinder.position.y) * cam.viewfinder.zoom,
+    );
+  }
+
   // ─── Tile Painting ──────────────────────────────────────────────────────────
 
   void paintTile(Offset screenPos, TileType type, {int variant = 0}) {
     final tile = screenToTile(screenPos);
     if (tile == null) return;
     mapData.setTile(tile.$1, tile.$2, type, variant: variant);
+  }
+
+  void floodFill(Offset screenPos, TileType type, {int variant = 0}) {
+    final tile = screenToTile(screenPos);
+    if (tile == null) return;
+    mapData.floodFill(tile.$1, tile.$2, type, variant: variant);
+  }
+
+  void fillRect(Offset startScreen, Offset endScreen, TileType type, {int variant = 0}) {
+    final a = screenToTile(startScreen);
+    final b = screenToTile(endScreen);
+    if (a == null || b == null) return;
+    mapData.fillRect(a.$1, a.$2, b.$1, b.$2, type, variant: variant);
+  }
+
+  void fillAll(TileType type, {int variant = 0}) {
+    mapData.fillAll(type, variant: variant);
   }
 
   // ─── Collision Toggle ────────────────────────────────────────────────────────

@@ -12,8 +12,9 @@ import '../../services/audio_manager.dart';
 
 class LeftPanel extends StatefulWidget {
   final EditorState editorState;
+  final double width;
 
-  const LeftPanel({super.key, required this.editorState});
+  const LeftPanel({super.key, required this.editorState, this.width = 200});
 
   @override
   State<LeftPanel> createState() => _LeftPanelState();
@@ -25,7 +26,7 @@ class _LeftPanelState extends State<LeftPanel> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 200,
+      width: widget.width,
       color: AppColors.panelBg,
       child: Column(
         children: [
@@ -390,16 +391,32 @@ class _TilesListState extends State<_TilesList> {
     super.initState();
     widget.editorState.selectedTile.addListener(_onSelectionChanged);
     widget.editorState.selectedTileVariant.addListener(_onSelectionChanged);
+    widget.editorState.activeTool.addListener(_onSelectionChanged);
   }
 
   @override
   void dispose() {
     widget.editorState.selectedTile.removeListener(_onSelectionChanged);
     widget.editorState.selectedTileVariant.removeListener(_onSelectionChanged);
+    widget.editorState.activeTool.removeListener(_onSelectionChanged);
     super.dispose();
   }
 
   void _onSelectionChanged() => setState(() {});
+
+  void _fillAll() {
+    final es = widget.editorState;
+    es.pushUndo();
+    es.game.fillAll(es.selectedTile.value, variant: es.selectedTileVariant.value);
+    es.notifyMapChanged();
+  }
+
+  void _eraseAll() {
+    final es = widget.editorState;
+    es.pushUndo();
+    es.game.fillAll(TileType.empty);
+    es.notifyMapChanged();
+  }
 
   Future<void> _addVariant(TileType tile) async {
     final result = await FilePicker.platform.pickFiles(
@@ -445,10 +462,58 @@ class _TilesListState extends State<_TilesList> {
     final selected = widget.editorState.selectedTile.value;
     final selectedVariant = widget.editorState.selectedTileVariant.value;
     final cache = widget.editorState.spriteCache;
+    final es = widget.editorState;
+    final activeTool = es.activeTool.value;
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: _paintableTiles.length,
+    return Column(
+      children: [
+        // ── Tool strip ──────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+          child: Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              _TileToolBtn(
+                icon: Icons.edit_outlined,
+                tooltip: 'Paint',
+                active: activeTool == EditorTool.tile,
+                onTap: () => es.activeTool.value = EditorTool.tile,
+              ),
+              _TileToolBtn(
+                icon: Icons.format_color_fill,
+                tooltip: 'Flood Fill',
+                active: activeTool == EditorTool.fill,
+                onTap: () => es.activeTool.value = EditorTool.fill,
+              ),
+              _TileToolBtn(
+                icon: Icons.crop_square,
+                tooltip: 'Rectangle Fill',
+                active: activeTool == EditorTool.rect,
+                onTap: () => es.activeTool.value = EditorTool.rect,
+              ),
+              _TileToolBtn(
+                icon: Icons.select_all,
+                tooltip: 'Fill entire map with selected tile',
+                active: false,
+                onTap: _fillAll,
+              ),
+              _TileToolBtn(
+                icon: Icons.delete_sweep_outlined,
+                tooltip: 'Erase entire map',
+                active: false,
+                danger: true,
+                onTap: _eraseAll,
+              ),
+            ],
+          ),
+        ),
+        Container(height: 1, color: AppColors.borderColor),
+        // ── Tile list ───────────────────────────────────────────────────────
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: _paintableTiles.length,
       itemBuilder: (_, i) {
         final tile = _paintableTiles[i];
         final isSelected = selected == tile;
@@ -564,6 +629,58 @@ class _TilesListState extends State<_TilesList> {
           ),
         );
       },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Tile Tool Button ─────────────────────────────────────────────────────────
+
+class _TileToolBtn extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final bool active;
+  final bool danger;
+  final VoidCallback onTap;
+
+  const _TileToolBtn({
+    required this.icon,
+    required this.tooltip,
+    required this.active,
+    required this.onTap,
+    this.danger = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = danger
+        ? AppColors.error
+        : active
+            ? AppColors.accent
+            : AppColors.textMuted;
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 28,
+          height: 26,
+          decoration: BoxDecoration(
+            color: active ? AppColors.accent.withOpacity(0.18) : AppColors.surfaceBg,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(
+              color: danger
+                  ? AppColors.error.withOpacity(0.5)
+                  : active
+                      ? AppColors.accent
+                      : AppColors.borderColor,
+            ),
+          ),
+          child: Icon(icon, size: 14, color: color),
+        ),
+      ),
     );
   }
 }

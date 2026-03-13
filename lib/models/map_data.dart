@@ -137,6 +137,49 @@ class MapData {
     }
   }
 
+  void fillAll(TileType type, {int variant = 0}) {
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        tiles[y][x] = type;
+        tileVariants[y][x] = variant;
+      }
+    }
+  }
+
+  void fillRect(int x1, int y1, int x2, int y2, TileType type, {int variant = 0}) {
+    final minX = x1 < x2 ? x1 : x2;
+    final maxX = x1 < x2 ? x2 : x1;
+    final minY = y1 < y2 ? y1 : y2;
+    final maxY = y1 < y2 ? y2 : y1;
+    for (int y = minY; y <= maxY; y++) {
+      for (int x = minX; x <= maxX; x++) {
+        if (inBounds(x, y)) {
+          tiles[y][x] = type;
+          tileVariants[y][x] = variant;
+        }
+      }
+    }
+  }
+
+  void floodFill(int startX, int startY, TileType newType, {int variant = 0}) {
+    if (!inBounds(startX, startY)) return;
+    final oldType = tiles[startY][startX];
+    final oldVariant = tileVariants[startY][startX];
+    if (oldType == newType && oldVariant == variant) return;
+    final stack = <(int, int)>[(startX, startY)];
+    while (stack.isNotEmpty) {
+      final (x, y) = stack.removeLast();
+      if (!inBounds(x, y)) continue;
+      if (tiles[y][x] != oldType || tileVariants[y][x] != oldVariant) continue;
+      tiles[y][x] = newType;
+      tileVariants[y][x] = variant;
+      stack.add((x + 1, y));
+      stack.add((x - 1, y));
+      stack.add((x, y + 1));
+      stack.add((x, y - 1));
+    }
+  }
+
   // ─── Serialization ──────────────────────────────────────────────────────────
 
   Map<String, dynamic> toJson() {

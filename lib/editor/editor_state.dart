@@ -9,7 +9,7 @@ import '../services/project_service.dart';
 import '../services/sprite_cache.dart';
 import 'editor_game.dart';
 
-enum EditorTool { tile, object, collision }
+enum EditorTool { tile, object, collision, fill, rect }
 
 class _UndoSnapshot {
   final List<List<int>> tiles;
