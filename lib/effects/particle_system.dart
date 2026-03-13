@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'dart:ui';
 
-enum EffectType { blast, fire, snow, electric, smoke }
+enum EffectType { blast, fire, snow, electric, smoke, rain }
 
 enum BlastTheme { fire, ice, electric, smoke }
 
@@ -60,6 +60,7 @@ class _Emitter {
   final double speedPx;
   final double sizeMultiplier;
   final int maxParticles; // 0 = unlimited
+  final double extra; // type-specific: rain = angle degrees
   double accumDt = 0;
 
   _Emitter({
@@ -72,6 +73,7 @@ class _Emitter {
     required this.speedPx,
     this.sizeMultiplier = 1.0,
     this.maxParticles = 0,
+    this.extra = 0,
   });
 
   bool get isDone => remaining != -1 && remaining <= 0;
@@ -241,6 +243,32 @@ class ParticleSystem {
     ));
   }
 
+  // ── Rain — continuous diagonal rainfall emitter ──────────────────────────
+
+  void startRain(
+    double x,
+    double y, {
+    int density = 5,
+    double areaPx = 256,
+    double speedPx = 220,
+    double duration = -1,
+    double sizeMultiplier = 1.0,
+    int maxParticles = 0,
+    double angleDeg = 15,
+  }) {
+    _emitters.add(_Emitter(
+      x: x, y: y,
+      type: EffectType.rain,
+      remaining: duration,
+      intensity: density,
+      spreadPx: areaPx,
+      speedPx: speedPx,
+      sizeMultiplier: sizeMultiplier,
+      maxParticles: maxParticles,
+      extra: angleDeg,
+    ));
+  }
+
   // ── Snow — continuous downward snowflake emitter ──────────────────────────
 
   void startSnow(
@@ -344,6 +372,8 @@ class ParticleSystem {
         _emitSnow(e);
       case EffectType.smoke:
         _emitSmoke(e);
+      case EffectType.rain:
+        _emitRain(e);
       default:
         break;
     }
@@ -399,6 +429,29 @@ class ParticleSystem {
       sizeEnd: 1.0 * sm,
       colorA: const Color(0xFFECF6FF),
       colorB: const Color(0x00B0D8FF),
+      gravity: 0,
+    ));
+  }
+
+  void _emitRain(_Emitter e) {
+    final sm = e.sizeMultiplier.clamp(0.3, 4.0);
+    final ox = (_rand.nextDouble() - 0.5) * e.spreadPx;
+    final speed = e.speedPx * (0.85 + _rand.nextDouble() * 0.3);
+    // Convert wind angle (degrees from vertical) to velocity components
+    final angleRad = e.extra * 3.14159265 / 180.0;
+    final vx = speed * sin(angleRad) * (0.85 + _rand.nextDouble() * 0.3);
+    final vy = speed * cos(angleRad);
+    final life = (e.spreadPx * 1.3) / speed;
+    _particles.add(_Particle(
+      x: e.x + ox,
+      y: e.y,
+      vx: vx,
+      vy: vy,
+      life: life,
+      sizeStart: (1.2 + _rand.nextDouble() * 1.0) * sm,
+      sizeEnd: 0.4 * sm,
+      colorA: const Color(0xFFAAD4FF),
+      colorB: const Color(0x005599CC),
       gravity: 0,
     ));
   }

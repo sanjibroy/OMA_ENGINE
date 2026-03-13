@@ -112,6 +112,7 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
       ),
       child: SizedBox(
         width: 420,
+        height: MediaQuery.of(context).size.height * 0.85,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -143,9 +144,10 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
             ),
             const Divider(height: 1, color: AppColors.borderColor),
 
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // ── Viewport ────────────────────────────────────────────
@@ -183,6 +185,16 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
                   // ── Game Options ─────────────────────────────────────────
                   _sectionLabel('GAME OPTIONS'),
                   const SizedBox(height: 10),
+                  _buildToggleRow(
+                    label: 'Camera follows player',
+                    description: 'Camera tracks the player during gameplay',
+                    value: _proj.cameraFollow,
+                    onChanged: (v) {
+                      setState(() => _proj.cameraFollow = v);
+                      widget.onChanged();
+                    },
+                  ),
+                  const SizedBox(height: 14),
                   _buildToggleRow(
                     label: 'Allow player to zoom',
                     description: 'Scroll wheel zooms in/out during gameplay',
@@ -241,6 +253,25 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
 
                   const SizedBox(height: 24),
 
+                  // ── Collectible Labels ───────────────────────────────────
+                  _sectionLabel('COLLECTIBLE LABELS'),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Rename collectible types shown in the HUD.',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+                  ),
+                  const SizedBox(height: 10),
+                  _labelField('Coin label', _proj.coinLabel,
+                      (v) { _proj.coinLabel = v; widget.onChanged(); }),
+                  const SizedBox(height: 8),
+                  _labelField('Gem label', _proj.gemLabel,
+                      (v) { _proj.gemLabel = v; widget.onChanged(); }),
+                  const SizedBox(height: 8),
+                  _labelField('Collectible label', _proj.collectibleLabel,
+                      (v) { _proj.collectibleLabel = v; widget.onChanged(); }),
+
+                  const SizedBox(height: 24),
+
                   // ── Done ────────────────────────────────────────────────
                   Align(
                     alignment: Alignment.centerRight,
@@ -262,6 +293,7 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
                     ),
                   ),
                 ],
+                ),
               ),
             ),
           ],
@@ -278,6 +310,41 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
           fontWeight: FontWeight.w700,
           letterSpacing: 1.0,
         ),
+      );
+
+  Widget _labelField(String label, String current, void Function(String) onChanged) =>
+      Row(
+        children: [
+          SizedBox(
+            width: 130,
+            child: Text(label,
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+          ),
+          Expanded(
+            child: SizedBox(
+              height: 30,
+              child: TextField(
+                controller: TextEditingController(text: current),
+                style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
+                decoration: InputDecoration(
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  filled: true,
+                  fillColor: AppColors.surfaceBg,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(5),
+                    borderSide: const BorderSide(color: AppColors.borderColor),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(5),
+                    borderSide: const BorderSide(color: AppColors.borderColor),
+                  ),
+                ),
+                onChanged: onChanged,
+              ),
+            ),
+          ),
+        ],
       );
 
   Widget _buildDropdown() => Container(

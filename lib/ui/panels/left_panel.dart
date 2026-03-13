@@ -878,11 +878,8 @@ class _ObjectsListState extends State<_ObjectsList> {
                                   shape: BoxShape.circle,
                                 ),
                                 child: Center(
-                                  child: Text(type.symbol,
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold)),
+                                  child: Icon(type.icon,
+                                      color: Colors.white, size: 11),
                                 ),
                               ),
                       ),

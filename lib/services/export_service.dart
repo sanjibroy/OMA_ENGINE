@@ -202,6 +202,7 @@ class ExportService {
         'maps': exportedMaps,
         'musicPaths': exportMusicPaths,
         'sfxPaths': exportSfxPaths,
+        'items': state.project.items.map((i) => i.toJson()).toList(),
       }));
 
       return ExportResult.ok(gameDir, safeName);
@@ -474,6 +475,7 @@ with zipfile.ZipFile(base_apk, 'r') as src:
       'maps': exportedMaps,
       'musicPaths': exportMusicPaths,
       'sfxPaths': exportSfxPaths,
+      'items': state.project.items.map((i) => i.toJson()).toList(),
     }).codeUnits;
 
     return data;

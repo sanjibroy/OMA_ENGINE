@@ -27,7 +27,11 @@ class _CenterCanvasState extends State<CenterCanvas> {
   // HUD state (updated by game callbacks)
   int _health = 100;
   int _score = 0;
+  int _coins = 0;
+  int _gems = 0;
+  int _items = 0;
   String? _message;
+  String? _equippedItemName;
   bool _isGameOver = false;
   bool _isWin = false;
 
@@ -37,10 +41,14 @@ class _CenterCanvasState extends State<CenterCanvas> {
   void initState() {
     super.initState();
     _game = _state.game;
-    _game.onHudUpdate = (h, s) => setState(() {
+    _game.onHudUpdate = (h, s, c, g, i) => setState(() {
           _health = h;
           _score = s;
+          _coins = c;
+          _gems = g;
+          _items = i;
         });
+    _game.onEquippedItemChanged = (name) => setState(() => _equippedItemName = name);
     _game.onMessage = (msg) {
       setState(() => _message = msg);
       // Auto-clear message after 3 seconds
@@ -65,6 +73,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _game.onHudUpdate = null;
     _game.onMessage = null;
     _game.onGameEvent = null;
+    _game.onEquippedItemChanged = null;
     _gameFocusNode.dispose();
     super.dispose();
   }
@@ -84,17 +93,23 @@ class _CenterCanvasState extends State<CenterCanvas> {
       setState(() {
         _health = 100;
         _score = 0;
+        _coins = 0;
+        _gems = 0;
+        _items = 0;
         _message = null;
         _isGameOver = false;
         _isWin = false;
+        _equippedItemName = null;
       });
       _game.setShowCollision(false); // hide collision overlay during play
       _game.allowGameZoom = _state.project.allowZoom;
       _game.gameMaxZoom = _state.project.maxZoom;
+      _game.allowCameraFollow = _state.project.cameraFollow;
       _game.startPlay(
         viewportWidth: _state.project.viewportWidth,
         viewportHeight: _state.project.viewportHeight,
         effects: _state.project.effects,
+        items: _state.project.items,
         keyBindings: _state.project.keyBindings,
       );
       // Delay so panel rebuilds finish before we steal focus
@@ -164,15 +179,20 @@ class _CenterCanvasState extends State<CenterCanvas> {
     setState(() {
       _health = 100;
       _score = 0;
+      _coins = 0;
+      _gems = 0;
+      _items = 0;
       _message = null;
       _isGameOver = false;
       _isWin = false;
+      _equippedItemName = null;
     });
 
     await _game.startPlay(
       viewportWidth: _state.project.viewportWidth,
       viewportHeight: _state.project.viewportHeight,
       effects: _state.project.effects,
+      items: _state.project.items,
       keyBindings: _state.project.keyBindings,
     );
     Future.delayed(const Duration(milliseconds: 100), () {
@@ -288,7 +308,14 @@ class _CenterCanvasState extends State<CenterCanvas> {
               children: [
                 // ── HUD strip (top position) ─────────────────
                 if (isPlay && !_state.project.hudAtBottom)
-                  _PlayHudStrip(health: _health, score: _score),
+                  _PlayHudStrip(
+                    health: _health, score: _score,
+                    coins: _coins, gems: _gems, items: _items,
+                    coinLabel: _state.project.coinLabel,
+                    gemLabel: _state.project.gemLabel,
+                    itemLabel: _state.project.collectibleLabel,
+                    equippedItemName: _equippedItemName,
+                  ),
 
                 // ── Game canvas ──────────────────────────────
                 Expanded(
@@ -361,7 +388,14 @@ class _CenterCanvasState extends State<CenterCanvas> {
 
                 // ── HUD strip (bottom position) ──────────────
                 if (isPlay && _state.project.hudAtBottom)
-                  _PlayHudStrip(health: _health, score: _score),
+                  _PlayHudStrip(
+                    health: _health, score: _score,
+                    coins: _coins, gems: _gems, items: _items,
+                    coinLabel: _state.project.coinLabel,
+                    gemLabel: _state.project.gemLabel,
+                    itemLabel: _state.project.collectibleLabel,
+                    equippedItemName: _equippedItemName,
+                  ),
               ],
             ),
           ),
@@ -376,8 +410,41 @@ class _CenterCanvasState extends State<CenterCanvas> {
 class _PlayHudStrip extends StatelessWidget {
   final int health;
   final int score;
+  final int coins;
+  final int gems;
+  final int items;
+  final String coinLabel;
+  final String gemLabel;
+  final String itemLabel;
+  final String? equippedItemName;
 
-  const _PlayHudStrip({required this.health, required this.score});
+  const _PlayHudStrip({
+    required this.health,
+    required this.score,
+    required this.coins,
+    required this.gems,
+    required this.items,
+    required this.coinLabel,
+    required this.gemLabel,
+    required this.itemLabel,
+    this.equippedItemName,
+  });
+
+  Widget _divider() => Container(
+      width: 1, height: 14, color: AppColors.borderColor,
+      margin: const EdgeInsets.symmetric(horizontal: 10));
+
+  Widget _counter(IconData icon, Color color, int count, String label) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 12),
+          const SizedBox(width: 4),
+          Text('$count $label',
+              style: const TextStyle(
+                  color: AppColors.textPrimary, fontSize: 11,
+                  fontWeight: FontWeight.w600)),
+        ],
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -390,46 +457,78 @@ class _PlayHudStrip extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Health icon + bar + number
+          // Health
           const Icon(Icons.favorite, color: Color(0xFFF87171), size: 12),
           const SizedBox(width: 6),
           SizedBox(
-            width: 64,
+            width: 60,
             height: 5,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(3),
               child: LinearProgressIndicator(
                 value: health / 100,
                 backgroundColor: AppColors.borderColor,
-                valueColor:
-                    const AlwaysStoppedAnimation(Color(0xFFF87171)),
+                valueColor: const AlwaysStoppedAnimation(Color(0xFFF87171)),
               ),
             ),
           ),
           const SizedBox(width: 5),
           Text('$health',
-              style: const TextStyle(
-                  color: AppColors.textSecondary, fontSize: 11)),
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
 
-          // Divider
-          Container(
-              width: 1, height: 14, color: AppColors.borderColor,
-              margin: const EdgeInsets.symmetric(horizontal: 12)),
+          // Score (if > 0)
+          if (score > 0) ...[
+            _divider(),
+            _counter(Icons.star, const Color(0xFFFBBF24), score, 'pts'),
+          ],
 
-          // Score
-          const Icon(Icons.star, color: Color(0xFFFBBF24), size: 12),
-          const SizedBox(width: 5),
-          Text('$score',
-              style: const TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600)),
+          // Coins (if > 0)
+          if (coins > 0) ...[
+            _divider(),
+            _counter(Icons.monetization_on, const Color(0xFFFBBF24), coins, coinLabel),
+          ],
+
+          // Gems (if > 0)
+          if (gems > 0) ...[
+            _divider(),
+            _counter(Icons.diamond, const Color(0xFF818CF8), gems, gemLabel),
+          ],
+
+          // Items (if > 0)
+          if (items > 0) ...[
+            _divider(),
+            _counter(Icons.category, const Color(0xFF34D399), items, itemLabel),
+          ],
 
           const Spacer(),
 
-          // Controls hint
+          // Equipped weapon slot
+          if (equippedItemName != null) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppColors.accent.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: AppColors.accent.withOpacity(0.4)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.sports_martial_arts,
+                      size: 11, color: AppColors.accent),
+                  const SizedBox(width: 4),
+                  Text(equippedItemName!,
+                      style: const TextStyle(
+                          color: AppColors.accent, fontSize: 11,
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
+
           const Text(
-            'WASD / ↑↓←→  ·  Space',
+            'WASD / ↑↓←→  ·  Space = Attack',
             style: TextStyle(color: AppColors.textMuted, fontSize: 10),
           ),
         ],

@@ -6,6 +6,7 @@ import '../../services/project_service.dart';
 import '../../theme/app_theme.dart';
 import '../dialogs/new_map_dialog.dart';
 import '../dialogs/project_settings_dialog.dart';
+import '../dialogs/items_dialog.dart';
 // EditorTool is defined in editor_state.dart (already imported)
 
 class Toolbar extends StatefulWidget {
@@ -389,6 +390,16 @@ class _ToolbarState extends State<Toolbar> {
             onTap: () => ProjectSettingsDialog.show(
               context,
               project: _es.project,
+              onChanged: _es.notifyProjectChanged,
+            ),
+          ),
+          _ToolbarButton(
+            icon: Icons.sports_martial_arts,
+            label: 'Items',
+            tooltip: 'Items & Weapons',
+            onTap: () => ItemsDialog.show(
+              context,
+              items: _es.project.items,
               onChanged: _es.notifyProjectChanged,
             ),
           ),

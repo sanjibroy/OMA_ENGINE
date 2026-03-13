@@ -71,6 +71,15 @@ class ObjectsComponent extends Component {
         _previewParticles.startSmoke(worldX, worldY,
             density: fx.intensity, spreadPx: spreadPx, speedPx: speedPx,
             duration: fx.duration, sizeMultiplier: sm, maxParticles: fx.maxParticles);
+      case 'rain':
+        _previewParticles.startRain(worldX, worldY - tileSize * 8,
+            density: fx.intensity,
+            areaPx: tileSize * 20,
+            speedPx: speedPx > 0 ? speedPx : 220,
+            duration: fx.duration,
+            sizeMultiplier: sm,
+            maxParticles: fx.maxParticles > 0 ? fx.maxParticles : 300,
+            angleDeg: fx.radius.toDouble());
     }
   }
 
@@ -181,14 +190,15 @@ class ObjectsComponent extends Component {
         );
         // Fill
         canvas.drawCircle(center, r, Paint()..color = obj.type.color);
-        // Symbol letter
+        // Material icon glyph
         final tp = TextPainter(
           text: TextSpan(
-            text: obj.type.symbol,
+            text: String.fromCharCode(obj.type.icon.codePoint),
             style: TextStyle(
+              fontFamily: obj.type.icon.fontFamily,
+              package: obj.type.icon.fontPackage,
               color: Colors.white,
-              fontSize: r * 0.9,
-              fontWeight: FontWeight.bold,
+              fontSize: r * 1.1,
             ),
           ),
           textDirection: TextDirection.ltr,

@@ -84,6 +84,31 @@ class MapData {
     animSheets = {};
   }
 
+  /// Resize the map, preserving existing tile data that fits within the new bounds.
+  void resize(int newWidth, int newHeight) {
+    final oldTiles     = tiles;
+    final oldVariants  = tileVariants;
+    final oldCollision = tileCollision;
+    final oldH = height;
+    final oldW = width;
+
+    width  = newWidth;
+    height = newHeight;
+
+    tiles = List.generate(newHeight, (y) =>
+        List.generate(newWidth, (x) =>
+            (y < oldH && x < oldW) ? oldTiles[y][x] : TileType.empty));
+    tileVariants = List.generate(newHeight, (y) =>
+        List.generate(newWidth, (x) =>
+            (y < oldH && x < oldW) ? oldVariants[y][x] : 0));
+    tileCollision = List.generate(newHeight, (y) =>
+        List.generate(newWidth, (x) =>
+            (y < oldH && x < oldW) ? oldCollision[y][x] : 0));
+
+    // Remove objects that fall outside the new bounds
+    objects.removeWhere((o) => o.tileX >= newWidth || o.tileY >= newHeight);
+  }
+
   int getTileCollision(int x, int y) {
     if (!inBounds(x, y)) return 0;
     return tileCollision[y][x];

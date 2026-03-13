@@ -50,6 +50,9 @@ extension _TriggerUI on TriggerType {
         TriggerType.playerEntersWater        => Icons.water,
         TriggerType.playerExitsWater         => Icons.water_drop_outlined,
         TriggerType.playerFishes             => Icons.set_meal,
+        TriggerType.playerTouchesHazard      => Icons.warning_amber,
+        TriggerType.playerActivatesCheckpoint => Icons.flag,
+        TriggerType.enemyDefeated            => Icons.emoji_events,
       };
 
   String get shortLabel => switch (this) {
@@ -69,6 +72,9 @@ extension _TriggerUI on TriggerType {
         TriggerType.playerEntersWater        => 'Enters Water',
         TriggerType.playerExitsWater         => 'Exits Water',
         TriggerType.playerFishes             => 'Fishes',
+        TriggerType.playerTouchesHazard      => 'Touches Hazard',
+        TriggerType.playerActivatesCheckpoint => 'Activates Checkpoint',
+        TriggerType.enemyDefeated            => 'Enemy Defeated',
       };
 
   Color get catColor => _tCats[category]!.color;
@@ -103,6 +109,7 @@ extension _ActionUI on ActionType {
         ActionType.launchProjectile      => Icons.rocket_launch,
         ActionType.stopProjectile        => Icons.cancel_schedule_send,
         ActionType.playEffect            => Icons.auto_fix_high,
+        ActionType.shakeCamera           => Icons.vibration,
       };
 
   String get shortLabel => switch (this) {
@@ -133,6 +140,7 @@ extension _ActionUI on ActionType {
         ActionType.launchProjectile      => 'Launch Projectile',
         ActionType.stopProjectile        => 'Stop Projectile',
         ActionType.playEffect            => 'Play Effect',
+        ActionType.shakeCamera           => 'Shake Camera',
       };
 
   Color get catColor => _aCats[category]!.color;

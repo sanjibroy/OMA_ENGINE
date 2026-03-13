@@ -1,5 +1,6 @@
 import 'dart:math' show max;
 import '../models/game_effect.dart';
+import '../models/item_def.dart';
 import 'package:flame/camera.dart';
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
@@ -32,12 +33,14 @@ class EditorGame extends FlameGame with ScrollDetector {
   Viewport? _savedViewport;
 
   // Play mode HUD callbacks — set by CenterCanvas
-  void Function(int health, int score)? onHudUpdate;
+  void Function(int health, int score, int coins, int gems, int items)? onHudUpdate;
   void Function(String msg)? onMessage;
   void Function(String event)? onGameEvent;
+  void Function(String? name)? onEquippedItemChanged;
 
-  bool allowGameZoom = false; // set from project.allowZoom before startPlay
-  double gameMaxZoom = 2.0;  // set from project.maxZoom before startPlay
+  bool allowGameZoom = false;    // set from project.allowZoom before startPlay
+  double gameMaxZoom = 2.0;     // set from project.maxZoom before startPlay
+  bool allowCameraFollow = true; // set from project.cameraFollow before startPlay
 
   EditorGame({required this.mapData, required this.spriteCache});
 
@@ -73,7 +76,7 @@ class EditorGame extends FlameGame with ScrollDetector {
 
   // ─── Play Mode ───────────────────────────────────────────────────────────────
 
-  Future<void> startPlay({int viewportWidth = 0, int viewportHeight = 0, List<dynamic>? effects, Map<String, String>? keyBindings}) async {
+  Future<void> startPlay({int viewportWidth = 0, int viewportHeight = 0, List<dynamic>? effects, List<dynamic>? items, Map<String, String>? keyBindings}) async {
     if (_world == null || _camera == null) return;
     _vpW = viewportWidth;
     _vpH = viewportHeight;
@@ -142,10 +145,12 @@ class EditorGame extends FlameGame with ScrollDetector {
       spriteCache: spriteCache,
       rules: List.from(mapData.rules),
       effects: effects?.cast<GameEffect>() ?? [],
+      items: items?.cast<ItemDef>() ?? [],
       keyBindings: keyBindings ?? {},
-      onHudUpdate: (h, s) => onHudUpdate?.call(h, s),
+      onHudUpdate: (h, s, c, g, i) => onHudUpdate?.call(h, s, c, g, i),
       onMessage: (msg) => onMessage?.call(msg),
       onGameEvent: (event) => onGameEvent?.call(event),
+      onEquippedItemChanged: (name) => onEquippedItemChanged?.call(name),
     );
     _playSession!.init();
 
@@ -210,7 +215,7 @@ class EditorGame extends FlameGame with ScrollDetector {
       } catch (e, st) {
         print('[GAME] PlaySession.update() threw: $e\n$st');
       }
-      _followPlayer();
+      if (allowCameraFollow) _followPlayer();
     }
   }
 
@@ -237,7 +242,10 @@ class EditorGame extends FlameGame with ScrollDetector {
     cx = (cx / snap).roundToDouble() * snap;
     cy = (cy / snap).roundToDouble() * snap;
 
-    cam.viewfinder.position = Vector2(cx, cy);
+    cam.viewfinder.position = Vector2(
+      cx + _playSession!.cameraShakeX,
+      cy + _playSession!.cameraShakeY,
+    );
   }
 
   // ─── Camera ─────────────────────────────────────────────────────────────────

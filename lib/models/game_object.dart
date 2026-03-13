@@ -1,54 +1,84 @@
 import 'package:flutter/material.dart';
 
 enum GameObjectType {
-  playerSpawn,
-  enemy,
-  npc,
-  coin,
-  chest,
-  door,
-  waterBody,
+  playerSpawn,  // 0
+  enemy,        // 1
+  npc,          // 2
+  coin,         // 3
+  chest,        // 4
+  door,         // 5
+  waterBody,    // 6
+  gem,          // 7 — second collectible
+  collectible,  // 8 — generic item
+  prop,         // 9 — environmental object (solid by default)
+  hazard,       // 10 — damage zone
+  checkpoint,   // 11 — respawn point
+  weaponPickup, // 12 — item/weapon/tool on the ground to pick up
 }
 
 extension GameObjectTypeExtension on GameObjectType {
   String get label => switch (this) {
         GameObjectType.playerSpawn => 'Player Spawn',
-        GameObjectType.enemy => 'Enemy',
-        GameObjectType.npc => 'NPC',
-        GameObjectType.coin => 'Coin',
-        GameObjectType.chest => 'Chest',
-        GameObjectType.door => 'Door',
-        GameObjectType.waterBody => 'Water Zone',
+        GameObjectType.enemy      => 'Enemy',
+        GameObjectType.npc        => 'NPC',
+        GameObjectType.coin       => 'Coin',
+        GameObjectType.chest      => 'Chest',
+        GameObjectType.door       => 'Door',
+        GameObjectType.waterBody  => 'Water Zone',
+        GameObjectType.gem        => 'Gem',
+        GameObjectType.collectible => 'Collectible',
+        GameObjectType.prop       => 'Prop',
+        GameObjectType.hazard     => 'Hazard',
+        GameObjectType.checkpoint   => 'Checkpoint',
+        GameObjectType.weaponPickup => 'Item Pickup',
       };
 
   String get symbol => switch (this) {
         GameObjectType.playerSpawn => 'P',
-        GameObjectType.enemy => 'E',
-        GameObjectType.npc => 'N',
-        GameObjectType.coin => 'C',
-        GameObjectType.chest => 'X',
-        GameObjectType.door => 'D',
-        GameObjectType.waterBody => 'W',
+        GameObjectType.enemy      => 'E',
+        GameObjectType.npc        => 'N',
+        GameObjectType.coin       => 'C',
+        GameObjectType.chest      => 'X',
+        GameObjectType.door       => 'D',
+        GameObjectType.waterBody  => 'W',
+        GameObjectType.gem        => 'G',
+        GameObjectType.collectible => 'I',
+        GameObjectType.prop       => 'O',
+        GameObjectType.hazard     => '!',
+        GameObjectType.checkpoint   => 'K',
+        GameObjectType.weaponPickup => 'W',
       };
 
   Color get color => switch (this) {
         GameObjectType.playerSpawn => const Color(0xFF6C63FF),
-        GameObjectType.enemy => const Color(0xFFEF4444),
-        GameObjectType.npc => const Color(0xFF22C55E),
-        GameObjectType.coin => const Color(0xFFFBBF24),
-        GameObjectType.chest => const Color(0xFFB45309),
-        GameObjectType.door => const Color(0xFF94A3B8),
-        GameObjectType.waterBody => const Color(0xFF29B6F6),
+        GameObjectType.enemy      => const Color(0xFFEF4444),
+        GameObjectType.npc        => const Color(0xFF22C55E),
+        GameObjectType.coin       => const Color(0xFFFBBF24),
+        GameObjectType.chest      => const Color(0xFFB45309),
+        GameObjectType.door       => const Color(0xFF94A3B8),
+        GameObjectType.waterBody  => const Color(0xFF29B6F6),
+        GameObjectType.gem        => const Color(0xFF818CF8),
+        GameObjectType.collectible => const Color(0xFF34D399),
+        GameObjectType.prop       => const Color(0xFF78716C),
+        GameObjectType.hazard     => const Color(0xFFFF4444),
+        GameObjectType.checkpoint   => const Color(0xFF38BDF8),
+        GameObjectType.weaponPickup => const Color(0xFFFF9800),
       };
 
   IconData get icon => switch (this) {
         GameObjectType.playerSpawn => Icons.person,
-        GameObjectType.enemy => Icons.smart_toy,
-        GameObjectType.npc => Icons.face,
-        GameObjectType.coin => Icons.monetization_on,
-        GameObjectType.chest => Icons.inventory_2,
-        GameObjectType.door => Icons.door_front_door,
-        GameObjectType.waterBody => Icons.water,
+        GameObjectType.enemy      => Icons.smart_toy,
+        GameObjectType.npc        => Icons.face,
+        GameObjectType.coin       => Icons.monetization_on,
+        GameObjectType.chest      => Icons.inventory_2,
+        GameObjectType.door       => Icons.door_front_door,
+        GameObjectType.waterBody  => Icons.water,
+        GameObjectType.gem        => Icons.diamond,
+        GameObjectType.collectible => Icons.category,
+        GameObjectType.prop       => Icons.park,
+        GameObjectType.hazard     => Icons.warning_amber,
+        GameObjectType.checkpoint   => Icons.flag,
+        GameObjectType.weaponPickup => Icons.sports_martial_arts,
       };
 
   bool get isUnique => this == GameObjectType.playerSpawn;
@@ -132,18 +162,24 @@ class GameObject {
             'targetY': 0,
           },
         GameObjectType.waterBody => {
-            'waterMode': 'wade',       // block / wade / swim / boat
-            'flowDirection': 'none',   // none / N / S / E / W
-            'flowStrength': 1.0,       // tiles/sec push
+            'waterMode': 'wade',
+            'flowDirection': 'none',
+            'flowStrength': 1.0,
             'canFish': false,
             'fishDensity': 3,
             'damaging': false,
             'damagePerSecond': 1.0,
-            'animStyle': 'ripple',     // still / ripple / flow / waves
-            'waterColor': 'blue',      // blue / green / brown / red
+            'animStyle': 'ripple',
+            'waterColor': 'blue',
             'opacity': 0.6,
           },
-        GameObjectType.playerSpawn => {},
+        GameObjectType.gem        => {'value': 1},
+        GameObjectType.collectible => {'value': 1},
+        GameObjectType.prop       => {'solid': true},
+        GameObjectType.hazard     => {'damage': 1.0, 'knockback': false},
+        GameObjectType.checkpoint   => {},
+        GameObjectType.playerSpawn  => {},
+        GameObjectType.weaponPickup => {'itemId': ''},
       };
 
   Map<String, dynamic> toJson() => {

@@ -1,4 +1,4 @@
-import 'dart:math' show pi, sin, cos;
+import 'dart:math' show pi, sin, cos, atan2, Random;
 import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +7,7 @@ import '../effects/particle_system.dart';
 import '../models/game_effect.dart';
 import '../models/game_object.dart';
 import '../models/game_rule.dart';
+import '../models/item_def.dart';
 import '../models/map_data.dart';
 import '../services/sprite_cache.dart';
 
@@ -69,6 +70,29 @@ class _DashFx {
 
 enum _EnemyBehavior { idle, patrol, chase }
 
+// ─── Live weapon projectile ───────────────────────────────────────────────────
+
+class _LiveProjectile {
+  Vector2 pos;
+  final Vector2 dir;       // normalized direction
+  final double speedPx;
+  final double damage;
+  final double rangePx;
+  final bool piercing;
+  double distTraveled = 0;
+
+  _LiveProjectile({
+    required this.pos,
+    required this.dir,
+    required this.speedPx,
+    required this.damage,
+    required this.rangePx,
+    required this.piercing,
+  });
+}
+
+// ─── Enemy ────────────────────────────────────────────────────────────────────
+
 class _Enemy {
   final GameObject source;
   Vector2 pos;
@@ -79,6 +103,8 @@ class _Enemy {
   _FadeAnim? fade;
   double pixelSpeed = 0;
   double chaseRangePx = 0;
+  int health = 3;
+  int maxHealth = 3;
 
   Vector2? patrolStart;
   Vector2? patrolEnd;
@@ -102,6 +128,12 @@ class _Enemy {
   }
 
   void setIdle() => behavior = _EnemyBehavior.idle;
+
+  /// Returns true if this hit killed the enemy.
+  bool takeDamage(double dmg) {
+    health = (health - dmg.round()).clamp(0, maxHealth);
+    return health <= 0;
+  }
 
   void update(double dt, Vector2 playerPos, double maxX, double maxY) {
     switch (behavior) {
@@ -135,11 +167,13 @@ class PlaySession {
   final SpriteCache spriteCache;
   final List<GameRule> rules;
   final List<GameEffect> effects;
+  final List<ItemDef> items;
   final Map<String, String> keyBindings;
 
-  final void Function(int health, int score) onHudUpdate;
+  final void Function(int health, int score, int coins, int gems, int items) onHudUpdate;
   final void Function(String msg) onMessage;
   final void Function(String event) onGameEvent;
+  final void Function(String? name)? onEquippedItemChanged;
 
   late Vector2 _playerPos;
   bool _playerFlipH = false;
@@ -148,6 +182,16 @@ class PlaySession {
   double _playerRotation = 0.0;
   int _health = 100;
   int _score = 0;
+  int _coinCount = 0;
+  int _gemCount = 0;
+  int _itemCount = 0;
+  Vector2? _checkpointPos; // last activated checkpoint position
+  ItemDef? _equippedItem;  // currently held weapon/tool
+  Vector2 _facingDir = Vector2(1, 0); // last movement direction for attack aim
+  double _attackCooldown = 0;
+  double _swingTimer = 0;
+  bool _spaceWasPressed = false;
+  final List<_LiveProjectile> _liveProjectiles = [];
   double _playerSpeedTiles = 4.0;
   double _elapsedSec = 0;
 
@@ -167,6 +211,16 @@ class PlaySession {
   final Map<String, GameEffect> _landEffects = {};
   final Map<String, _DashFx> _dashFx = {};
   final ParticleSystem _particles = ParticleSystem();
+  final _shakeRand = Random();
+  double _shakeRemaining = 0;
+  double _shakeTotalDuration = 0;
+  double _shakeMagnitude = 0;
+  double _shakeX = 0;
+  double _shakeY = 0;
+
+  double get cameraShakeX => _shakeX;
+  double get cameraShakeY => _shakeY;
+
   static const double _hitCooldown = 1.5;
 
   bool _playerInWater = false;
@@ -182,10 +236,12 @@ class PlaySession {
     required this.spriteCache,
     required this.rules,
     required this.effects,
+    this.items = const [],
     this.keyBindings = const {},
     required this.onHudUpdate,
     required this.onMessage,
     required this.onGameEvent,
+    this.onEquippedItemChanged,
   });
 
   /// Resolves the physical key bound to a key trigger type.
@@ -259,10 +315,13 @@ class PlaySession {
 
     // Init enemies from map objects
     for (final obj in mapData.objects.where((o) => o.type == GameObjectType.enemy)) {
+      final hp = ((obj.properties['health'] as num?)?.toInt() ?? 3).clamp(1, 9999);
       final e = _Enemy(
         source: obj,
         pos: Vector2((obj.tileX + 0.5) * ts, (obj.tileY + 0.5) * ts),
       );
+      e.health = hp;
+      e.maxHealth = hp;
       e.hidden = obj.hidden;
       e.alpha = obj.alpha;
       _enemies.add(e);
@@ -275,7 +334,7 @@ class PlaySession {
     }
 
     _applyStartRules();
-    onHudUpdate(_health, _score);
+    onHudUpdate(_health, _score, _coinCount, _gemCount, _itemCount);
   }
 
   void _applyStartRules() {
@@ -308,14 +367,18 @@ class PlaySession {
 
   void update(double dt) {
     _elapsedSec += dt;
+    if (_attackCooldown > 0) _attackCooldown = (_attackCooldown - dt).clamp(0.0, double.infinity);
+    if (_swingTimer > 0) _swingTimer = (_swingTimer - dt).clamp(0.0, double.infinity);
     _tickCooldowns(dt);
     _updateFades(dt);
+    _tickShake(dt);
     _updateFx(dt);
     _tickProjectileHideTimers(dt);
     _particles.update(dt);
     _checkWater(dt);        // update water state BEFORE movement
     _checkKeyTriggers(dt); // uses correct _waterSpeedMult this frame
     _checkTimerRules(dt);
+    _updateLiveProjectiles(dt);
     _moveEnemies(dt);
     _checkCollisions();
     _checkProximityRules();
@@ -465,6 +528,20 @@ class PlaySession {
     }
   }
 
+  void _tickShake(double dt) {
+    if (_shakeRemaining <= 0) {
+      _shakeX = 0;
+      _shakeY = 0;
+      return;
+    }
+    _shakeRemaining -= dt;
+    // Decay magnitude toward zero as shake timer runs out
+    final progress = (_shakeRemaining / _shakeTotalDuration).clamp(0.0, 1.0);
+    final mag = _shakeMagnitude * progress;
+    _shakeX = (_shakeRand.nextDouble() - 0.5) * mag * 2;
+    _shakeY = (_shakeRand.nextDouble() - 0.5) * mag * 2;
+  }
+
   void _tickCooldowns(double dt) {
     final keys = _cooldowns.keys.toList();
     for (final k in keys) {
@@ -491,6 +568,20 @@ class PlaySession {
     if (left)  _fireKey(TriggerType.keyLeftPressed,  dt, dirX: -1, dirY:  0);
     if (right) _fireKey(TriggerType.keyRightPressed, dt, dirX:  1, dirY:  0);
     if (space) _fireKey(TriggerType.keySpacePressed, dt, dirX:  0, dirY:  0);
+
+    // Update facing direction from movement input
+    double fdx = 0, fdy = 0;
+    if (left)  fdx -= 1;
+    if (right) fdx += 1;
+    if (up)    fdy -= 1;
+    if (down)  fdy += 1;
+    if (fdx != 0 || fdy != 0) _facingDir = Vector2(fdx, fdy).normalized();
+
+    // Attack on space edge (fires once per press, not held)
+    if (space && !_spaceWasPressed && _equippedItem != null && _attackCooldown <= 0) {
+      _tryAttack();
+    }
+    _spaceWasPressed = space;
 
     // Fallback: if no movement rules exist, move with default speed
     final hasMovementRules = rules.any((r) =>
@@ -524,10 +615,14 @@ class PlaySession {
     if (mapData.getTile(tx, ty).isSolid) return true;
     // Block-mode water zones act as solid walls
     for (final obj in mapData.objects) {
-      if (obj.type != GameObjectType.waterBody) continue;
       if (_hiddenObjectIds.contains(obj.id)) continue;
-      if (obj.tileX == tx && obj.tileY == ty &&
+      if (obj.tileX != tx || obj.tileY != ty) continue;
+      if (obj.type == GameObjectType.waterBody &&
           (obj.properties['waterMode'] as String? ?? 'wade') == 'block') {
+        return true;
+      }
+      if (obj.type == GameObjectType.prop &&
+          (obj.properties['solid'] as bool? ?? true)) {
         return true;
       }
     }
@@ -597,10 +692,47 @@ class PlaySession {
       switch (obj.type) {
         case GameObjectType.coin:
         case GameObjectType.chest:
+          _coinCount += (obj.properties['value'] as num?)?.toInt() ?? 1;
+          onHudUpdate(_health, _score, _coinCount, _gemCount, _itemCount);
           _fire(TriggerType.playerTouchesCollectible, triggerObj: obj, cooldownKey: obj.id);
-          // Only auto-remove if no fade animation was started by the rule.
-          // If a fade was started, _updateFades will hide/remove it when done.
           if (!_objectFades.containsKey(obj.id)) toRemove.add(obj);
+        case GameObjectType.gem:
+          _gemCount += (obj.properties['value'] as num?)?.toInt() ?? 1;
+          onHudUpdate(_health, _score, _coinCount, _gemCount, _itemCount);
+          _fire(TriggerType.playerTouchesCollectible, triggerObj: obj, cooldownKey: obj.id);
+          if (!_objectFades.containsKey(obj.id)) toRemove.add(obj);
+        case GameObjectType.collectible:
+          _itemCount += (obj.properties['value'] as num?)?.toInt() ?? 1;
+          onHudUpdate(_health, _score, _coinCount, _gemCount, _itemCount);
+          _fire(TriggerType.playerTouchesCollectible, triggerObj: obj, cooldownKey: obj.id);
+          if (!_objectFades.containsKey(obj.id)) toRemove.add(obj);
+        case GameObjectType.hazard:
+          final dmg = (obj.properties['damage'] as num?)?.toDouble() ?? 1.0;
+          _fire(TriggerType.playerTouchesHazard, triggerObj: obj, cooldownKey: 'hazard_${obj.id}');
+          if (!_cooldowns.containsKey('hazardDmg_${obj.id}')) {
+            _health = (_health - dmg.round()).clamp(0, 100);
+            onHudUpdate(_health, _score, _coinCount, _gemCount, _itemCount);
+            _cooldowns['hazardDmg_${obj.id}'] = _hitCooldown;
+            if (_health <= 0) _fire(TriggerType.playerHealthZero);
+          }
+        case GameObjectType.checkpoint:
+          final ts2 = mapData.tileSize.toDouble();
+          final newPos = Vector2((obj.tileX + 0.5) * ts2, (obj.tileY + 0.5) * ts2);
+          if (_checkpointPos == null || _checkpointPos != newPos) {
+            _checkpointPos = newPos;
+            _fire(TriggerType.playerActivatesCheckpoint, triggerObj: obj, cooldownKey: 'cp_${obj.id}');
+          }
+        case GameObjectType.weaponPickup:
+          final itemId = obj.properties['itemId'] as String? ?? '';
+          if (itemId.isNotEmpty) {
+            try {
+              final def = items.firstWhere((i) => i.id == itemId);
+              _equippedItem = def;
+              onEquippedItemChanged?.call(def.name);
+              onMessage('Picked up ${def.name}');
+            } catch (_) {}
+            mapData.objects.remove(obj);
+          }
         case GameObjectType.door:
           _fire(TriggerType.playerTouchesDoor, triggerObj: obj, cooldownKey: 'door_${obj.id}');
         case GameObjectType.npc:
@@ -647,6 +779,84 @@ class PlaySession {
         }
       }
     }
+  }
+
+  // ─── Combat ───────────────────────────────────────────────────────────────
+
+  void _tryAttack() {
+    final item = _equippedItem!;
+    if (item.category == WeaponCategory.ranged) {
+      _doRangedAttack(item);
+    } else {
+      _doMeleeAttack(item);
+    }
+  }
+
+  void _doMeleeAttack(ItemDef item) {
+    final ts = mapData.tileSize.toDouble();
+    _attackCooldown = item.cooldown;
+    _swingTimer = 0.25;
+
+    final rangePx = item.combatRange * ts;
+    final toKill = <_Enemy>[];
+
+    for (final e in _enemies) {
+      if (e.hidden) continue;
+      final diff = e.pos - _playerPos;
+      if (diff.length > rangePx) continue;
+      // 180° frontal arc — enemy must be roughly in front of player
+      if (diff.length > 0.01 && diff.normalized().dot(_facingDir) < 0) continue;
+      if (e.takeDamage(item.combatDamage)) toKill.add(e);
+    }
+    for (final e in toKill) _killEnemy(e);
+  }
+
+  void _doRangedAttack(ItemDef item) {
+    final ts = mapData.tileSize.toDouble();
+    _attackCooldown = item.cooldown;
+    final dir = _facingDir.clone();
+    if (dir.length < 0.01) dir.x = 1;
+    _liveProjectiles.add(_LiveProjectile(
+      pos: _playerPos.clone(),
+      dir: dir.normalized(),
+      speedPx: item.projectileSpeed,
+      damage: item.combatDamage,
+      rangePx: item.combatRange * ts,
+      piercing: item.piercing,
+    ));
+  }
+
+  void _killEnemy(_Enemy e) {
+    e.hidden = true;
+    _fire(TriggerType.enemyDefeated, triggerObj: e.source, cooldownKey: 'death_${e.source.id}');
+  }
+
+  void _updateLiveProjectiles(double dt) {
+    final ts = mapData.tileSize.toDouble();
+    final toRemove = <_LiveProjectile>[];
+
+    for (final proj in _liveProjectiles) {
+      final step = proj.speedPx * dt;
+      proj.pos += proj.dir * step;
+      proj.distTraveled += step;
+
+      if (_solidAt(proj.pos.x, proj.pos.y) || proj.distTraveled >= proj.rangePx) {
+        toRemove.add(proj);
+        continue;
+      }
+
+      bool hit = false;
+      for (final e in _enemies) {
+        if (e.hidden) continue;
+        if ((e.pos - proj.pos).length < ts * 0.5) {
+          if (e.takeDamage(proj.damage)) _killEnemy(e);
+          if (!proj.piercing) { toRemove.add(proj); hit = true; break; }
+        }
+      }
+      if (hit) continue;
+    }
+
+    for (final p in toRemove) _liveProjectiles.remove(p);
   }
 
   void _checkWater(double dt) {
@@ -703,7 +913,7 @@ class PlaySession {
         if (_waterDamageTimer >= 1.0) {
           _waterDamageTimer -= 1.0;
           _health = (_health - dps.round()).clamp(0, 100);
-          onHudUpdate(_health, _score);
+          onHudUpdate(_health, _score, _coinCount, _gemCount, _itemCount);
           if (_health <= 0) _fire(TriggerType.playerHealthZero);
         }
       }
@@ -788,6 +998,17 @@ class PlaySession {
           (o.properties['canFish'] as bool? ?? false) &&
           o.tileX == (_playerPos.x / ts).floor() &&
           o.tileY == (_playerPos.y / ts).floor()),
+      TriggerType.playerTouchesHazard => mapData.objects.any((o) =>
+          o.type == GameObjectType.hazard &&
+          !_hiddenObjectIds.contains(o.id) &&
+          o.tileX == (_playerPos.x / ts).floor() &&
+          o.tileY == (_playerPos.y / ts).floor()),
+      TriggerType.playerActivatesCheckpoint => mapData.objects.any((o) =>
+          o.type == GameObjectType.checkpoint &&
+          !_hiddenObjectIds.contains(o.id) &&
+          o.tileX == (_playerPos.x / ts).floor() &&
+          o.tileY == (_playerPos.y / ts).floor()),
+      TriggerType.enemyDefeated => false, // event-based, not polled
     };
   }
 
@@ -856,11 +1077,11 @@ class PlaySession {
         case ActionType.adjustHealth:
           final delta = (a.params['value'] as int?) ?? 0;
           _health = (_health + delta).clamp(0, 100);
-          onHudUpdate(_health, _score);
+          onHudUpdate(_health, _score, _coinCount, _gemCount, _itemCount);
           if (_health <= 0) _fire(TriggerType.playerHealthZero);
         case ActionType.adjustScore:
           _score += (a.params['value'] as int?) ?? 0;
-          onHudUpdate(_health, _score);
+          onHudUpdate(_health, _score, _coinCount, _gemCount, _itemCount);
         case ActionType.showMessage:
           onMessage(a.params['text'] as String? ?? '');
         case ActionType.destroyTriggerObject:
@@ -1166,6 +1387,12 @@ class PlaySession {
             _projectileHideTimer.remove(obj.id);
             _landEffects.remove(obj.id);
           }
+        case ActionType.shakeCamera:
+          final dur = ((a.params['duration'] as int?) ?? 1).toDouble();
+          final mag = ((a.params['magnitude'] as int?) ?? 8).toDouble();
+          _shakeRemaining = dur;
+          _shakeTotalDuration = dur;
+          _shakeMagnitude = mag;
         case ActionType.playEffect:
           final fxName = (a.params['effectName'] as String? ?? '').trim();
           final fxDef = _findEffect(fxName);
@@ -1234,6 +1461,20 @@ class PlaySession {
         _particles.startSmoke(wx, wy,
             density: fx.intensity, spreadPx: spreadPx, speedPx: speedPx,
             duration: fx.duration, sizeMultiplier: sm, maxParticles: fx.maxParticles);
+      case 'rain':
+        // Rain covers the whole map — spawn from top-center
+        final mapW = mapData.width * ts;
+        _particles.startRain(
+          mapW / 2,
+          -ts, // slightly above the map
+          density: fx.intensity,
+          areaPx: mapW * 1.5,
+          speedPx: speedPx,
+          duration: fx.duration,
+          sizeMultiplier: sm,
+          maxParticles: fx.maxParticles > 0 ? fx.maxParticles : 600,
+          angleDeg: fx.radius.toDouble(), // radius field repurposed as angle
+        );
     }
   }
 
@@ -1274,6 +1515,18 @@ class PlaySession {
       _drawObject(canvas, Offset(e.pos.x + fxDx, e.pos.y + floatY + fxDy), ts, r, e.source.type,
           flipH: e.source.flipH, flipV: e.source.flipV,
           scale: e.source.scale, rotation: e.source.rotation, alpha: e.alpha);
+
+      // HP bar (only when damaged)
+      if (e.health < e.maxHealth && e.maxHealth > 0) {
+        final barW = ts * 0.7;
+        final barLeft = e.pos.x - barW / 2;
+        final barTop = e.pos.y - ts * 0.65;
+        final pct = (e.health / e.maxHealth).clamp(0.0, 1.0);
+        canvas.drawRect(Rect.fromLTWH(barLeft, barTop, barW, 3),
+            Paint()..color = Colors.black54);
+        canvas.drawRect(Rect.fromLTWH(barLeft, barTop, barW * pct, 3),
+            Paint()..color = const Color(0xFFF87171));
+      }
     }
 
     // Player
@@ -1290,8 +1543,44 @@ class PlaySession {
             scale: _playerScale, rotation: _playerRotation, alpha: _playerAlpha);
       } else {
         _drawCircle(canvas, Offset(_playerPos.x, playerDrawY), r,
-            const Color(0xFF4ADE80), 'P', alpha: _playerAlpha);
+            const Color(0xFF4ADE80), Icons.person, alpha: _playerAlpha);
       }
+    }
+
+    // Melee swing arc
+    final equipped = _equippedItem;
+    if (_swingTimer > 0 && equipped != null && equipped.category != WeaponCategory.ranged) {
+      final rangePx = equipped.combatRange * ts;
+      final angle = atan2(_facingDir.y, _facingDir.x);
+      const halfSweep = pi * 0.75;
+      final arcAlpha = (_swingTimer / 0.25).clamp(0.0, 1.0) * 0.35;
+      canvas.drawArc(
+        Rect.fromCenter(
+          center: Offset(_playerPos.x, _playerPos.y),
+          width: rangePx * 2, height: rangePx * 2,
+        ),
+        angle - halfSweep / 2,
+        halfSweep,
+        true,
+        Paint()
+          ..color = Colors.white.withOpacity(arcAlpha)
+          ..style = PaintingStyle.fill,
+      );
+    }
+
+    // Live weapon projectiles
+    for (final proj in _liveProjectiles) {
+      final trailEnd = Offset(proj.pos.x - proj.dir.x * 8, proj.pos.y - proj.dir.y * 8);
+      canvas.drawLine(
+        trailEnd, Offset(proj.pos.x, proj.pos.y),
+        Paint()
+          ..color = const Color(0xFFFFD700).withOpacity(0.5)
+          ..strokeWidth = 2,
+      );
+      canvas.drawCircle(
+        Offset(proj.pos.x, proj.pos.y), 4,
+        Paint()..color = const Color(0xFFFFD700),
+      );
     }
 
     // Particles — always on top
@@ -1306,7 +1595,7 @@ class PlaySession {
       _drawSprite(canvas, sprite, center.dx, center.dy, ts,
           flipH: flipH, flipV: flipV, scale: scale, rotation: rotation, alpha: alpha);
     } else {
-      _drawCircle(canvas, center, r, type.color, type.symbol, alpha: alpha);
+      _drawCircle(canvas, center, r, type.color, type.icon, alpha: alpha);
     }
   }
 
@@ -1342,18 +1631,19 @@ class PlaySession {
     canvas.restore();
   }
 
-  void _drawCircle(Canvas canvas, Offset center, double r, Color color, String symbol,
+  void _drawCircle(Canvas canvas, Offset center, double r, Color color, IconData icon,
       {double alpha = 1.0}) {
     canvas.drawCircle(center + const Offset(1, 2), r,
         Paint()..color = Color(0x4D000000).withOpacity(0.3 * alpha));
     canvas.drawCircle(center, r, Paint()..color = color.withOpacity(alpha));
     final tp = TextPainter(
       text: TextSpan(
-        text: symbol,
+        text: String.fromCharCode(icon.codePoint),
         style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
           color: Color.fromARGB((alpha * 255).round().clamp(0, 255), 255, 255, 255),
-          fontSize: r * 0.9,
-          fontWeight: FontWeight.bold,
+          fontSize: r * 1.1,
         ),
       ),
       textDirection: TextDirection.ltr,

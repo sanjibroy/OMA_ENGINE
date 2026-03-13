@@ -24,6 +24,11 @@ enum TriggerType {
   playerEntersWater,
   playerExitsWater,
   playerFishes,
+  // New object types
+  playerTouchesHazard,
+  playerActivatesCheckpoint,
+  // Combat
+  enemyDefeated,
 }
 
 extension TriggerTypeExtension on TriggerType {
@@ -44,6 +49,9 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.playerEntersWater => 'Player enters Water Zone',
         TriggerType.playerExitsWater => 'Player exits Water Zone',
         TriggerType.playerFishes => 'Player fishes (Space in water)',
+        TriggerType.playerTouchesHazard => 'Player touches Hazard',
+        TriggerType.playerActivatesCheckpoint => 'Player activates Checkpoint',
+        TriggerType.enemyDefeated => 'Enemy is defeated',
       };
 
   TriggerCategory get category => switch (this) {
@@ -60,9 +68,13 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.playerHealthZero ||
         TriggerType.playerEntersWater ||
         TriggerType.playerExitsWater ||
-        TriggerType.playerFishes =>
+        TriggerType.playerFishes ||
+        TriggerType.playerTouchesHazard ||
+        TriggerType.playerActivatesCheckpoint =>
           TriggerCategory.player,
-        TriggerType.enemyNearPlayer => TriggerCategory.enemy,
+        TriggerType.enemyNearPlayer ||
+        TriggerType.enemyDefeated =>
+          TriggerCategory.enemy,
         TriggerType.gameStart || TriggerType.onTimer => TriggerCategory.game,
       };
 
@@ -77,7 +89,8 @@ extension TriggerTypeExtension on TriggerType {
           true,
         TriggerType.playerEntersWater ||
         TriggerType.playerExitsWater ||
-        TriggerType.playerFishes =>
+        TriggerType.playerFishes ||
+        TriggerType.enemyDefeated =>
           false,
         _ => false,
       };
@@ -136,6 +149,8 @@ enum ActionType {
   stopProjectile,
   // Particle effects
   playEffect,
+  // Camera
+  shakeCamera,
 }
 
 extension ActionTypeExtension on ActionType {
@@ -167,6 +182,7 @@ extension ActionTypeExtension on ActionType {
         ActionType.launchProjectile => 'Launch projectile',
         ActionType.stopProjectile => 'Stop projectile',
         ActionType.playEffect => 'Play effect',
+        ActionType.shakeCamera => 'Shake camera',
       };
 
   ActionCategory get category => switch (this) {
@@ -202,6 +218,7 @@ extension ActionTypeExtension on ActionType {
         ActionType.launchProjectile => ActionCategory.world,
         ActionType.stopProjectile => ActionCategory.world,
         ActionType.playEffect => ActionCategory.effects,
+        ActionType.shakeCamera => ActionCategory.effects,
       };
 
   /// Parameter keys this action expects.
@@ -320,6 +337,10 @@ extension ActionTypeExtension on ActionType {
           ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'bomb'),
           ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'bomb'),
         ],
+        ActionType.shakeCamera => [
+          ActionParam('duration', ActionParamType.number, label: 'Duration (s)', hint: '1'),
+          ActionParam('magnitude', ActionParamType.number, label: 'Magnitude (px)', hint: '8'),
+        ],
         ActionType.playEffect => [
           ActionParam('effectName', ActionParamType.text, label: 'Effect name', hint: 'MyExplosion'),
           ActionParam('target', ActionParamType.choice, label: 'Position',
@@ -426,6 +447,11 @@ extension ActionTypeExtension on ActionType {
             final t = p['target'] as String? ?? 'named';
             final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : '#${p['tag'] ?? ''}';
             return 'Stop projectile $who';
+          }(),
+        ActionType.shakeCamera => () {
+            final d = p['duration'] ?? 1;
+            final m = p['magnitude'] ?? 8;
+            return 'Shake camera ${d}s mag ${m}px';
           }(),
         ActionType.playEffect => () {
             final fx = p['effectName'] as String? ?? '';

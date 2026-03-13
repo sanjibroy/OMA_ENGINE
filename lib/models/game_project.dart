@@ -1,4 +1,5 @@
 import 'game_effect.dart';
+import 'item_def.dart';
 
 class ProjectMap {
   final String id;
@@ -28,8 +29,9 @@ class GameProject {
   int viewportWidth;   // virtual viewport W (0 = fullscreen)
   int viewportHeight;  // virtual viewport H (0 = fullscreen)
   bool hudAtBottom; // HUD strip position in the exported game + editor preview
-  bool allowZoom;   // whether the player can zoom with scroll wheel in game
-  double maxZoom;   // maximum zoom level when allowZoom is true
+  bool allowZoom;      // whether the player can zoom with scroll wheel in game
+  double maxZoom;      // maximum zoom level when allowZoom is true
+  bool cameraFollow;   // whether camera follows the player in play mode
   String androidOrientation; // 'landscape' or 'portrait'
   List<ProjectMap> maps;
 
@@ -38,11 +40,17 @@ class GameProject {
   int playerHealth;
   int playerLives;
 
+  // Collectible display labels (shown in HUD)
+  String coinLabel;
+  String gemLabel;
+  String collectibleLabel;
+
   // Reserved for future features — kept as empty maps until editors are built
   Map<String, String> musicPaths; // trackName → relative path
   Map<String, String> sfxPaths;   // sfxName   → relative path
   Map<String, String> fontPaths;  // fontName  → relative path
   List<GameEffect> effects;
+  List<ItemDef> items;
   /// Key bindings: TriggerType.name → key identifier string (e.g. 'keySpacePressed' → 'e')
   /// Empty map = use defaults. Only action/custom keys are stored here.
   Map<String, String> keyBindings;
@@ -57,6 +65,7 @@ class GameProject {
     this.hudAtBottom = true,
     this.allowZoom = false,
     this.maxZoom = 2.0,
+    this.cameraFollow = true,
     this.androidOrientation = 'landscape',
     this.playerSpeed = 4.0,
     this.playerHealth = 6,
@@ -65,13 +74,18 @@ class GameProject {
     Map<String, String>? musicPaths,
     Map<String, String>? sfxPaths,
     Map<String, String>? fontPaths,
+    this.coinLabel = 'Coin',
+    this.gemLabel = 'Gem',
+    this.collectibleLabel = 'Item',
     List<GameEffect>? effects,
+    List<ItemDef>? items,
     Map<String, String>? keyBindings,
   })  : maps = maps ?? [],
         musicPaths = musicPaths ?? {},
         sfxPaths = sfxPaths ?? {},
         fontPaths = fontPaths ?? {},
         effects = effects ?? [],
+        items = items ?? [],
         keyBindings = keyBindings ?? {};
 
   ProjectMap? get startMap => maps.isEmpty
@@ -89,6 +103,7 @@ class GameProject {
         'hudAtBottom': hudAtBottom,
         'allowZoom': allowZoom,
         'maxZoom': maxZoom,
+        'cameraFollow': cameraFollow,
         'androidOrientation': androidOrientation,
         'playerSpeed': playerSpeed,
         'playerHealth': playerHealth,
@@ -98,7 +113,11 @@ class GameProject {
         'sfxPaths': sfxPaths,
         'fontPaths': fontPaths,
         'effects': effects.map((e) => e.toJson()).toList(),
+        'items': items.map((i) => i.toJson()).toList(),
         'keyBindings': keyBindings,
+        'coinLabel': coinLabel,
+        'gemLabel': gemLabel,
+        'collectibleLabel': collectibleLabel,
       };
 
   factory GameProject.fromJson(Map<String, dynamic> j) => GameProject(
@@ -111,6 +130,7 @@ class GameProject {
         hudAtBottom: j['hudAtBottom'] as bool? ?? true,
         allowZoom: j['allowZoom'] as bool? ?? false,
         maxZoom: (j['maxZoom'] as num?)?.toDouble() ?? 2.0,
+        cameraFollow: j['cameraFollow'] as bool? ?? true,
         androidOrientation: j['androidOrientation'] as String? ?? 'landscape',
         playerSpeed: (j['playerSpeed'] as num?)?.toDouble() ?? 4.0,
         playerHealth: j['playerHealth'] as int? ?? 6,
@@ -125,6 +145,12 @@ class GameProject {
         effects: (j['effects'] as List? ?? [])
             .map((e) => GameEffect.fromJson(e as Map<String, dynamic>))
             .toList(),
+        items: (j['items'] as List? ?? [])
+            .map((i) => ItemDef.fromJson(i as Map<String, dynamic>))
+            .toList(),
         keyBindings: Map<String, String>.from(j['keyBindings'] as Map? ?? {}),
+        coinLabel: j['coinLabel'] as String? ?? 'Coin',
+        gemLabel: j['gemLabel'] as String? ?? 'Gem',
+        collectibleLabel: j['collectibleLabel'] as String? ?? 'Item',
       );
 }
