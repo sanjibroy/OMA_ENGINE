@@ -46,12 +46,16 @@ class MapData {
   late List<List<int>> tileCollision; // 0=default, 1=force passable, 2=force solid
   List<GameObject> objects = [];
   List<GameRule> rules = [];
-  Map<String, String> spritePaths = {};       // GameObjectType.name → path
-  Map<String, List<String>> tileSpritesPaths = {}; // TileType.name → [path, ...]
+  Map<String, String> spritePaths = {};              // GameObjectType.name → path (variant 0, backward compat)
+  Map<String, List<String>> objectVariantPaths = {}; // GameObjectType.name → [variant0, variant1, ...]
+  Map<String, List<String>> tileSpritesPaths = {};   // TileType.name → [path, ...]
   Map<String, Map<String, List<String>>> animPaths = {}; // type → animName → [frames]
   Map<String, Map<String, int>> animFps = {};            // type → animName → fps
   Map<String, String> animDefaults = {};                 // type → default anim name
   Map<String, Map<String, Map<String, dynamic>>> animSheets = {}; // type → animName → AnimSheetDef.toJson()
+  Map<String, List<String>> variantNames = {}; // typeName → [name per variant index]
+  Map<String, bool> variantUseAnimation = {}; // 'type:vi' → true/false
+  bool ySortEnabled = false; // sort objects by Y within same zOrder
 
   MapData({
     this.name = 'Untitled Map',
@@ -77,11 +81,15 @@ class MapData {
     objects = [];
     rules = [];
     spritePaths = {};
+    objectVariantPaths = {};
     tileSpritesPaths = {};
     animPaths = {};
     animFps = {};
     animDefaults = {};
     animSheets = {};
+    variantNames = {};
+    variantUseAnimation = {};
+    ySortEnabled = false;
   }
 
   /// Resize the map, preserving existing tile data that fits within the new bounds.
@@ -193,6 +201,7 @@ class MapData {
       'rules': rules.map((r) => r.toJson()).toList(),
       'spritePaths': spritePaths,
       'tileSpritesPaths': tileSpritesPaths,
+      if (objectVariantPaths.isNotEmpty) 'objectVariantPaths': objectVariantPaths,
     };
     // Only save tileVariants if any are non-zero
     if (tileVariants.any((row) => row.any((v) => v != 0))) {
@@ -209,6 +218,9 @@ class MapData {
     if (animFps.isNotEmpty) map['animFps'] = animFps;
     if (animDefaults.isNotEmpty) map['animDefaults'] = animDefaults;
     if (animSheets.isNotEmpty) map['animSheets'] = animSheets;
+    if (variantNames.isNotEmpty) map['variantNames'] = variantNames;
+    if (variantUseAnimation.isNotEmpty) map['variantUseAnimation'] = variantUseAnimation;
+    if (ySortEnabled) map['ySortEnabled'] = true; // only save when enabled (default is off)
     return map;
   }
 
@@ -251,13 +263,16 @@ class MapData {
         .map((r) => GameRule.fromJson(r as Map<String, dynamic>))
         .toList();
     spritePaths = Map<String, String>.from(json['spritePaths'] as Map? ?? {});
+    final rawOVP = json['objectVariantPaths'] as Map? ?? {};
+    objectVariantPaths = rawOVP.map((k, v) =>
+        MapEntry(k as String, (v as List).map((e) => e as String).toList()));
     final rawTSP = json['tileSpritesPaths'] as Map? ?? {};
     tileSpritesPaths = rawTSP.map((k, v) =>
         MapEntry(k as String, (v as List).map((e) => e as String).toList()));
 
     final rawAP = json['animPaths'] as Map? ?? {};
     if (rawAP.isNotEmpty && rawAP.values.first is Map) {
-      animPaths = rawAP.map((k, v) {
+      final parsed = rawAP.map((k, v) {
         final inner = v as Map;
         return MapEntry(
           k as String,
@@ -265,24 +280,38 @@ class MapData {
               ak as String, (av as List).map((e) => e as String).toList())),
         );
       });
+      // Normalize: keys without ':' are old format — append ':0'
+      animPaths = {
+        for (final e in parsed.entries)
+          (e.key.contains(':') ? e.key : '${e.key}:0'): e.value
+      };
     } else {
       animPaths = {}; // old format — discard, incompatible
     }
     final rawAF = json['animFps'] as Map? ?? {};
     if (rawAF.isNotEmpty && rawAF.values.first is Map) {
-      animFps = rawAF.map((k, v) {
+      final parsed = rawAF.map((k, v) {
         final inner = v as Map;
         return MapEntry(
             k as String, inner.map((ak, av) => MapEntry(ak as String, av as int)));
       });
+      animFps = {
+        for (final e in parsed.entries)
+          (e.key.contains(':') ? e.key : '${e.key}:0'): e.value
+      };
     } else {
       animFps = {};
     }
     final rawAD = json['animDefaults'] as Map? ?? {};
-    animDefaults = rawAD.map((k, v) => MapEntry(k as String, v as String));
+    final parsedAD = rawAD.map((k, v) => MapEntry(k as String, v as String));
+    animDefaults = {
+      for (final e in parsedAD.entries)
+        (e.key.contains(':') ? e.key : '${e.key}:0'): e.value
+    };
 
+    ySortEnabled = json['ySortEnabled'] as bool? ?? false;
     final rawAS = json['animSheets'] as Map? ?? {};
-    animSheets = rawAS.map((k, v) {
+    final parsedAS = rawAS.map((k, v) {
       final inner = v as Map;
       return MapEntry(
         k as String,
@@ -290,5 +319,47 @@ class MapData {
             MapEntry(ak as String, Map<String, dynamic>.from(av as Map))),
       );
     });
+    animSheets = {
+      for (final e in parsedAS.entries)
+        (e.key.contains(':') ? e.key : '${e.key}:0'): e.value
+    };
+
+    final rawVN = json['variantNames'] as Map? ?? {};
+    variantNames = rawVN.map((k, v) =>
+        MapEntry(k as String, (v as List).map((e) => e as String).toList()));
+
+    final rawVUA = json['variantUseAnimation'] as Map? ?? {};
+    variantUseAnimation = rawVUA.map((k, v) => MapEntry(k as String, v as bool));
+  }
+
+  // ─── Variant name helpers ────────────────────────────────────────────────
+
+  /// Returns the user-set name for a variant, or a generated default.
+  String getVariantName(GameObjectType type, int vi) {
+    final names = variantNames[type.name];
+    if (names != null && vi < names.length && names[vi].isNotEmpty) {
+      return names[vi];
+    }
+    return '${type.label} ${vi + 1}';
+  }
+
+  void setVariantName(GameObjectType type, int vi, String name) {
+    final names = variantNames.putIfAbsent(type.name, () => []);
+    while (names.length <= vi) names.add('');
+    names[vi] = name.trim();
+  }
+
+  // ─── Variant useAnimation helpers ────────────────────────────────────────
+  String _vaKey(GameObjectType type, int vi) => '${type.name}:$vi';
+
+  bool getVariantUseAnimation(GameObjectType type, int vi) =>
+      variantUseAnimation[_vaKey(type, vi)] ?? false;
+
+  void setVariantUseAnimation(GameObjectType type, int vi, bool value) {
+    if (value) {
+      variantUseAnimation[_vaKey(type, vi)] = true;
+    } else {
+      variantUseAnimation.remove(_vaKey(type, vi));
+    }
   }
 }

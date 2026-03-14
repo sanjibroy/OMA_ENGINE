@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../editor/editor_state.dart';
@@ -9,6 +10,8 @@ import '../../models/game_rule.dart';
 import '../../models/item_def.dart';
 import '../../theme/app_theme.dart';
 import '../dialogs/rule_editor_dialog.dart';
+import '../dialogs/animations_dialog.dart';
+import 'package:file_picker/file_picker.dart';
 
 class RightPanel extends StatefulWidget {
   final EditorState editorState;
@@ -110,12 +113,14 @@ class _PropertiesTabState extends State<_PropertiesTab> {
     _hCtrl = TextEditingController(text: '${map.height}');
     widget.editorState.mapChanged.addListener(_onMapChanged);
     widget.editorState.projectChanged.addListener(_rebuild);
+    widget.editorState.selectedObjectType.addListener(_rebuild);
   }
 
   @override
   void dispose() {
     widget.editorState.mapChanged.removeListener(_onMapChanged);
     widget.editorState.projectChanged.removeListener(_rebuild);
+    widget.editorState.selectedObjectType.removeListener(_rebuild);
     _wCtrl.dispose();
     _hCtrl.dispose();
     super.dispose();
@@ -186,8 +191,46 @@ class _PropertiesTabState extends State<_PropertiesTab> {
         _propertyRow('Total Tiles', '${map.width * map.height}'),
         const SizedBox(height: 8),
         _resizeRow(),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('Y-Sort',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+            GestureDetector(
+              onTap: () {
+                setState(() => map.ySortEnabled = !map.ySortEnabled);
+                widget.editorState.notifyMapChanged();
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: map.ySortEnabled
+                      ? AppColors.accent.withOpacity(0.15)
+                      : AppColors.surfaceBg,
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(
+                    color: map.ySortEnabled
+                        ? AppColors.accent
+                        : AppColors.borderColor,
+                  ),
+                ),
+                child: Text(
+                  map.ySortEnabled ? 'On' : 'Off',
+                  style: TextStyle(
+                    color: map.ySortEnabled
+                        ? AppColors.accent
+                        : AppColors.textMuted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
 
-        const SizedBox(height: 16),
+        _divider(),
 
         // ── Project settings ─────────────────────────────
         _sectionLabel('PROJECT SETTINGS'),
@@ -217,26 +260,41 @@ class _PropertiesTabState extends State<_PropertiesTab> {
             ),
           ],
         ),
+        const SizedBox(height: 8),
+        _playerSection(project),
 
-        const SizedBox(height: 16),
-
-        // ── Bottom section: context-sensitive ────────────
+        // ── Context-sensitive bottom ──────────────────────
         ValueListenableBuilder<EditorTool>(
           valueListenable: widget.editorState.activeTool,
           builder: (_, tool, __) {
-            // Object tool — show selected object or player defaults
             if (tool == EditorTool.object) {
               return ValueListenableBuilder<GameObject?>(
                 valueListenable: widget.editorState.selectedObject,
                 builder: (_, obj, __) {
-                  if (obj != null) {
-                    return _ObjectPropsForm(
-                      key: ValueKey(obj.id),
-                      obj: obj,
-                      editorState: widget.editorState,
-                    );
-                  }
-                  return _playerSection(project);
+                  final type = obj?.type ?? widget.editorState.selectedObjectType.value;
+                  final vi = obj?.variantIndex ??
+                      (widget.editorState.selectedVariantIndex[widget.editorState.selectedObjectType.value] ?? 0);
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _divider(),
+                      _SpriteAnimEditor(
+                        key: ValueKey('${type.name}:$vi'),
+                        editorState: widget.editorState,
+                        type: type,
+                        variantIndex: vi,
+                        onChanged: () => setState(() {}),
+                      ),
+                      if (obj != null) ...[
+                        _divider(),
+                        _ObjectPropsForm(
+                          key: ValueKey(obj.id),
+                          obj: obj,
+                          editorState: widget.editorState,
+                        ),
+                      ],
+                    ],
+                  );
                 },
               );
             }
@@ -245,9 +303,14 @@ class _PropertiesTabState extends State<_PropertiesTab> {
             return ValueListenableBuilder<(int, int)?>(
               valueListenable: widget.editorState.hoverTile,
               builder: (_, hover, __) {
-                return _TileInfoSection(
-                  editorState: widget.editorState,
-                  hover: hover,
+                return Column(
+                  children: [
+                    _divider(),
+                    _TileInfoSection(
+                      editorState: widget.editorState,
+                      hover: hover,
+                    ),
+                  ],
                 );
               },
             );
@@ -370,6 +433,15 @@ class _PropertiesTabState extends State<_PropertiesTab> {
         ),
       );
 
+  Widget _divider() => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Divider(
+          height: 1,
+          thickness: 1,
+          color: AppColors.borderColor.withOpacity(0.5),
+        ),
+      );
+
   Widget _sectionLabel(String text) => Text(
         text,
         style: const TextStyle(
@@ -486,6 +558,260 @@ class _PropertiesTabState extends State<_PropertiesTab> {
       );
 }
 
+// ─── Sprite & Animation Editor (shown in Properties tab when object tool active, no instance selected) ───
+
+class _SpriteAnimEditor extends StatefulWidget {
+  final EditorState editorState;
+  final GameObjectType type;
+  final int variantIndex;
+  final VoidCallback onChanged;
+
+  const _SpriteAnimEditor({
+    super.key,
+    required this.editorState,
+    required this.type,
+    required this.variantIndex,
+    required this.onChanged,
+  });
+
+  @override
+  State<_SpriteAnimEditor> createState() => _SpriteAnimEditorState();
+}
+
+class _SpriteAnimEditorState extends State<_SpriteAnimEditor> {
+  EditorState get _es => widget.editorState;
+  GameObjectType get _type => widget.type;
+  int get _vi => widget.variantIndex;
+
+  Future<void> _importOrReplaceSprite() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['png', 'jpg', 'jpeg', 'webp'],
+    );
+    if (result == null || result.files.single.path == null) return;
+    final path = result.files.single.path!;
+    final count = _es.spriteCache.objVariantCount(_type);
+    bool ok;
+    if (count <= _vi) {
+      final idx = await _es.spriteCache.addObjectVariant(_type, path);
+      ok = idx != null;
+    } else {
+      ok = await _es.spriteCache.replaceObjectVariant(_type, _vi, path);
+    }
+    if (ok) {
+      // Sync variant paths in mapData
+      final paths = _es.spriteCache.objVariantPathsList(_type);
+      _es.mapData.objectVariantPaths[_type.name] = List.from(paths);
+      if (paths.isNotEmpty) {
+        _es.mapData.spritePaths[_type.name] = paths[0];
+      }
+      _es.notifyMapChanged();
+      setState(() {});
+      widget.onChanged();
+    }
+  }
+
+  Future<void> _openAnimations() async {
+    await AnimationsDialog.show(
+      context,
+      type: _type,
+      variantIndex: _vi,
+      spriteCache: _es.spriteCache,
+      mapData: _es.mapData,
+      onChanged: () => setState(() {}),
+    );
+    setState(() {});
+    widget.onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cache = _es.spriteCache;
+    final variantCount = cache.objVariantCount(_type);
+    final hasSprite = variantCount > _vi;
+    final spritePath = hasSprite ? cache.objVariantPathsList(_type)[_vi] : null;
+    final isAnim = cache.isAnimated(_type, _vi);
+    final animCount = cache.animNames(_type, _vi).length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header
+        Row(
+          children: [
+            Container(
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(color: _type.color, shape: BoxShape.circle),
+              child: Center(
+                child: Icon(_type.icon, color: Colors.white, size: 11),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '${_type.label} — Variant ${_vi + 1}',
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+
+        // Sprite section
+        const Text('SPRITE',
+            style: TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.0)),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            // Thumbnail
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceBg,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: AppColors.borderColor),
+              ),
+              child: spritePath != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(5),
+                      child: Image.file(File(spritePath), fit: BoxFit.cover),
+                    )
+                  : Center(
+                      child: Icon(_type.icon, color: _type.color, size: 28),
+                    ),
+            ),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: _importOrReplaceSprite,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: AppColors.accent.withOpacity(0.4)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.image_outlined, size: 13, color: AppColors.accent),
+                    const SizedBox(width: 5),
+                    Text(
+                      hasSprite ? 'Replace' : 'Import Sprite',
+                      style: const TextStyle(color: AppColors.accent, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 14),
+
+        // Animations section
+        const Text('ANIMATIONS',
+            style: TextStyle(
+                color: AppColors.textMuted,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.0)),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: _openAnimations,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: isAnim
+                  ? AppColors.accent.withOpacity(0.12)
+                  : AppColors.surfaceBg,
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(
+                color: isAnim
+                    ? AppColors.accent.withOpacity(0.5)
+                    : AppColors.borderColor,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.movie_outlined,
+                    size: 13,
+                    color: isAnim ? AppColors.accent : AppColors.textSecondary),
+                const SizedBox(width: 6),
+                Text(
+                  isAnim
+                      ? '$animCount animation${animCount == 1 ? '' : 's'}'
+                      : 'Edit Animations\u2026',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isAnim ? AppColors.accent : AppColors.textSecondary,
+                  ),
+                ),
+                const Spacer(),
+                const Icon(Icons.chevron_right, size: 14, color: AppColors.textMuted),
+              ],
+            ),
+          ),
+        ),
+
+        // Use Animation toggle — only when animation frames exist
+        if (isAnim) ...[
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Use Animation',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              GestureDetector(
+                onTap: () {
+                  final cur = _es.mapData.getVariantUseAnimation(_type, _vi);
+                  _es.mapData.setVariantUseAnimation(_type, _vi, !cur);
+                  _es.notifyMapChanged();
+                  setState(() {});
+                  widget.onChanged();
+                },
+                child: Builder(builder: (ctx) {
+                  final on = _es.mapData.getVariantUseAnimation(_type, _vi);
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: on
+                          ? AppColors.accent.withOpacity(0.15)
+                          : AppColors.surfaceBg,
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(
+                        color: on ? AppColors.accent : AppColors.borderColor,
+                      ),
+                    ),
+                    child: Text(
+                      on ? 'On' : 'Off',
+                      style: TextStyle(
+                        color: on ? AppColors.accent : AppColors.textMuted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 // ─── Object Properties Form ────────────────────────────────────────────────────
 
 class _ObjectPropsForm extends StatefulWidget {
@@ -557,6 +883,11 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
 
   void _setAlpha(double v) {
     setState(() => widget.obj.alpha = v.clamp(0.0, 1.0));
+    widget.editorState.notifyMapChanged();
+  }
+
+  void _setZOrder(int v) {
+    setState(() => widget.obj.zOrder = v.clamp(-9, 9));
     widget.editorState.notifyMapChanged();
   }
 
@@ -790,6 +1121,13 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
             onIncrement: () => _setAlpha(obj.alpha + 0.1),
           ),
           const SizedBox(height: 4),
+          _transformRow(
+            label: 'Z-Order',
+            display: '${obj.zOrder}',
+            onDecrement: () => _setZOrder(obj.zOrder - 1),
+            onIncrement: () => _setZOrder(obj.zOrder + 1),
+          ),
+          const SizedBox(height: 4),
         ],
 
         // ── FX ─────────────────────────────────────────
@@ -901,14 +1239,12 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
         ],
 
         // ── Properties ─────────────────────────────────
-        if (obj.type != GameObjectType.playerSpawn) ...[
-          _sectionHeader(
-            'PROPERTIES',
-            _propsExpanded,
-            () => setState(() => _propsExpanded = !_propsExpanded),
-          ),
-          if (_propsExpanded) ..._buildTypeFields(obj, es),
-        ],
+        _sectionHeader(
+          'PROPERTIES',
+          _propsExpanded,
+          () => setState(() => _propsExpanded = !_propsExpanded),
+        ),
+        if (_propsExpanded) ..._buildTypeFields(obj, es),
       ],
     );
   }
@@ -926,11 +1262,17 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
               onChanged: (v) => _set('damage', v)),
           _numField('Patrol Range', obj.properties['patrolRange'] ?? 3,
               onChanged: (v) => _set('patrolRange', v)),
+          const SizedBox(height: 10),
+          ..._colliderSection(obj, es, defaultR: 0.38),
         ];
       case GameObjectType.npc:
-        return [_textareaField('Dialog',
-            obj.properties['dialog'] as String? ?? 'Hello!',
-            onChanged: (v) => _set('dialog', v))];
+        return [
+          _textareaField('Dialog',
+              obj.properties['dialog'] as String? ?? 'Hello!',
+              onChanged: (v) => _set('dialog', v)),
+          const SizedBox(height: 10),
+          ..._colliderSection(obj, es, defaultR: 0.38),
+        ];
       case GameObjectType.coin:
         return [
           _numField('Value', obj.properties['value'] ?? 1,
@@ -1088,9 +1430,129 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
         ];
       case GameObjectType.prop:
         final solid = obj.properties['solid'] as bool? ?? true;
+        final shape = obj.properties['blockShape'] as String? ?? 'rect';
+        final bw  = (obj.properties['blockW']  as num?)?.toDouble() ?? 1.0;
+        final bh  = (obj.properties['blockH']  as num?)?.toDouble() ?? 1.0;
+        final br  = (obj.properties['blockR']  as num?)?.toDouble() ?? 0.5;
+        final brx = (obj.properties['blockRX'] as num?)?.toDouble() ?? 0.5;
+        final bry = (obj.properties['blockRY'] as num?)?.toDouble() ?? 0.5;
         return [
           _checkboxRow('Solid (blocks player)', solid,
               () => _set('solid', !solid)),
+          if (solid) ...[
+            const SizedBox(height: 8),
+            _label('COLLISION SHAPE'),
+            const SizedBox(height: 6),
+            // Shape selector (2-row Wrap so Custom fits without overflow)
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _shapeBtn('Rect',    Icons.crop_square,       shape == 'rect',
+                    () => _set('blockShape', 'rect')),
+                _shapeBtn('Circle',  Icons.circle_outlined,   shape == 'circle',
+                    () => _set('blockShape', 'circle')),
+                _shapeBtn('Ellipse', Icons.circle_outlined,   shape == 'ellipse',
+                    () => _set('blockShape', 'ellipse')),
+                _shapeBtn('Custom',  Icons.polyline_outlined,  shape == 'custom',
+                    () => _set('blockShape', 'custom')),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Dimension sliders / hint
+            if (shape == 'rect') ...[
+              _blockSlider('Width',  bw,  0.1, 6.0, (v) => _set('blockW', v)),
+              _blockSlider('Height', bh,  0.1, 6.0, (v) => _set('blockH', v)),
+            ] else if (shape == 'circle') ...[
+              _blockSlider('Radius', br,  0.1, 4.0, (v) => _set('blockR', v)),
+            ] else if (shape == 'ellipse') ...[
+              _blockSlider('X Radius', brx, 0.1, 6.0, (v) => _set('blockRX', v)),
+              _blockSlider('Y Radius', bry, 0.1, 6.0, (v) => _set('blockRY', v)),
+            ] else ...[
+              // Custom — hint to use the sort region editor below
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  'Draw polygon via "Edit Sort Region" — same shape used for collision.',
+                  style: TextStyle(
+                      color: AppColors.textMuted.withOpacity(0.8), fontSize: 10),
+                ),
+              ),
+            ],
+          ],
+          // Sort region controls
+          const SizedBox(height: 10),
+          _label('DEPTH SORT'),
+          const SizedBox(height: 6),
+          _blockSlider('Sort Anchor', obj.sortAnchorY, -2.0, 2.0,
+              (v) { setState(() => obj.sortAnchorY = v); es.notifyMapChanged(); }),
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    es.sortEditMode.value = !es.sortEditMode.value;
+                    setState(() {});
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                    decoration: BoxDecoration(
+                      color: es.sortEditMode.value
+                          ? const Color(0xFFFFB300).withOpacity(0.15)
+                          : AppColors.surfaceBg,
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(
+                        color: es.sortEditMode.value
+                            ? const Color(0xFFFFB300).withOpacity(0.8)
+                            : AppColors.borderColor,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.polyline_outlined, size: 12,
+                            color: es.sortEditMode.value
+                                ? const Color(0xFFFFB300)
+                                : AppColors.textMuted),
+                        const SizedBox(width: 5),
+                        Text(
+                          es.sortEditMode.value ? 'Done Editing' : 'Edit Sort Region',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: es.sortEditMode.value
+                                ? const Color(0xFFFFB300)
+                                : AppColors.textMuted,
+                            fontWeight: es.sortEditMode.value
+                                ? FontWeight.w700
+                                : FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: () {
+                  setState(() => obj.properties['sortPoints'] = <List<double>>[]);
+                  es.notifyMapChanged();
+                },
+                child: Tooltip(
+                  message: 'Clear sort polygon',
+                  child: Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceBg,
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(color: AppColors.borderColor),
+                    ),
+                    child: const Icon(Icons.clear, size: 12, color: AppColors.textMuted),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ];
       case GameObjectType.hazard:
         final knockback = obj.properties['knockback'] as bool? ?? false;
@@ -1103,7 +1565,7 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
       case GameObjectType.checkpoint:
         return [];
       case GameObjectType.playerSpawn:
-        return [];
+        return _colliderSection(obj, es, defaultR: 0.35);
       case GameObjectType.weaponPickup:
         final items = es.project.items;
         final currentId = obj.properties['itemId'] as String? ?? '';
@@ -1404,6 +1866,200 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
                     color: AppColors.textSecondary,
                     fontSize: 11,
                     fontWeight: FontWeight.w600)),
+          ],
+        ),
+      );
+
+  Widget _shapeBtn(String label, IconData icon, bool active, VoidCallback onTap) =>
+      SizedBox(
+        width: 58,
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 100),
+            padding: const EdgeInsets.symmetric(vertical: 5),
+            decoration: BoxDecoration(
+              color: active
+                  ? const Color(0xFF00E5FF).withOpacity(0.15)
+                  : AppColors.surfaceBg,
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(
+                color: active
+                    ? const Color(0xFF00E5FF).withOpacity(0.7)
+                    : AppColors.borderColor,
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 13,
+                    color: active ? const Color(0xFF00E5FF) : AppColors.textMuted),
+                const SizedBox(height: 2),
+                Text(label,
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: active ? const Color(0xFF00E5FF) : AppColors.textMuted,
+                        fontWeight: active ? FontWeight.w700 : FontWeight.normal)),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  /// Shared collider shape section for player, enemy, and NPC.
+  List<Widget> _colliderSection(GameObject obj, EditorState es,
+      {double defaultR = 0.38}) {
+    final shape = obj.properties['blockShape'] as String? ?? 'circle';
+    final br  = (obj.properties['blockR']  as num?)?.toDouble() ?? defaultR;
+    final bw  = (obj.properties['blockW']  as num?)?.toDouble() ?? defaultR;
+    final bh  = (obj.properties['blockH']  as num?)?.toDouble() ?? defaultR;
+    final brx = (obj.properties['blockRX'] as num?)?.toDouble() ?? defaultR;
+    final bry = (obj.properties['blockRY'] as num?)?.toDouble() ?? defaultR;
+    return [
+      _label('COLLIDER SHAPE'),
+      const SizedBox(height: 6),
+      Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          _shapeBtn('Rect',    Icons.crop_square,      shape == 'rect',
+              () => _set('blockShape', 'rect')),
+          _shapeBtn('Circle',  Icons.circle_outlined,   shape == 'circle',
+              () => _set('blockShape', 'circle')),
+          _shapeBtn('Ellipse', Icons.circle_outlined,   shape == 'ellipse',
+              () => _set('blockShape', 'ellipse')),
+          _shapeBtn('Custom',  Icons.polyline_outlined,  shape == 'custom',
+              () => _set('blockShape', 'custom')),
+        ],
+      ),
+      const SizedBox(height: 8),
+      if (shape == 'rect') ...[
+        _blockSlider('Half Width',  bw,  0.1, 2.0, (v) => _set('blockW', v)),
+        _blockSlider('Half Height', bh,  0.1, 2.0, (v) => _set('blockH', v)),
+      ] else if (shape == 'circle') ...[
+        _blockSlider('Radius', br, 0.1, 2.0, (v) => _set('blockR', v)),
+      ] else if (shape == 'ellipse') ...[
+        _blockSlider('X Radius', brx, 0.1, 2.0, (v) => _set('blockRX', v)),
+        _blockSlider('Y Radius', bry, 0.1, 2.0, (v) => _set('blockRY', v)),
+      ] else ...[
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text(
+            'Draw polygon via "Edit Collider" button below.',
+            style: TextStyle(
+                color: AppColors.textMuted.withOpacity(0.8), fontSize: 10),
+          ),
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  es.sortEditMode.value = !es.sortEditMode.value;
+                  setState(() {});
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  decoration: BoxDecoration(
+                    color: es.sortEditMode.value
+                        ? const Color(0xFF00E5FF).withOpacity(0.12)
+                        : AppColors.surfaceBg,
+                    borderRadius: BorderRadius.circular(5),
+                    border: Border.all(
+                      color: es.sortEditMode.value
+                          ? const Color(0xFF00E5FF).withOpacity(0.8)
+                          : AppColors.borderColor,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.polyline_outlined, size: 12,
+                          color: es.sortEditMode.value
+                              ? const Color(0xFF00E5FF)
+                              : AppColors.textMuted),
+                      const SizedBox(width: 5),
+                      Text(
+                        es.sortEditMode.value ? 'Done Editing' : 'Edit Collider',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: es.sortEditMode.value
+                              ? const Color(0xFF00E5FF)
+                              : AppColors.textMuted,
+                          fontWeight: es.sortEditMode.value
+                              ? FontWeight.w700
+                              : FontWeight.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: () {
+                setState(() => obj.properties['sortPoints'] = <List<double>>[]);
+                es.notifyMapChanged();
+              },
+              child: Tooltip(
+                message: 'Clear collider polygon',
+                child: Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceBg,
+                    borderRadius: BorderRadius.circular(5),
+                    border: Border.all(color: AppColors.borderColor),
+                  ),
+                  child: const Icon(Icons.clear, size: 12, color: AppColors.textMuted),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ];
+  }
+
+  Widget _blockSlider(String label, double value, double min, double max,
+      void Function(double) onChanged) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 62,
+              child: Text(label,
+                  style: const TextStyle(
+                      color: AppColors.textSecondary, fontSize: 11)),
+            ),
+            Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 2,
+                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                  activeTrackColor: const Color(0xFF00E5FF),
+                  inactiveTrackColor: AppColors.borderColor,
+                  thumbColor: const Color(0xFF00E5FF),
+                  overlayColor: const Color(0xFF00E5FF).withOpacity(0.15),
+                ),
+                child: Slider(
+                  value: value.clamp(min, max),
+                  min: min,
+                  max: max,
+                  divisions: ((max - min) / 0.1).round(),
+                  onChanged: onChanged,
+                ),
+              ),
+            ),
+            SizedBox(
+              width: 32,
+              child: Text(value.toStringAsFixed(1),
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(
+                      color: AppColors.textMuted, fontSize: 10)),
+            ),
           ],
         ),
       );

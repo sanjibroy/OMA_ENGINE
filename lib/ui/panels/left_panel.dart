@@ -7,8 +7,9 @@ import '../../models/game_project.dart';
 import '../../models/map_data.dart';
 import '../../theme/app_theme.dart';
 import '../dialogs/new_map_dialog.dart';
-import '../dialogs/animations_dialog.dart';
+// import '../dialogs/animations_dialog.dart' // moved to right_panel;
 import '../../services/audio_manager.dart';
+import '../../editor/editor_game.dart';
 
 class LeftPanel extends StatefulWidget {
   final EditorState editorState;
@@ -52,7 +53,7 @@ class _LeftPanelState extends State<LeftPanel> {
             child: _selectedTab == 0
                 ? _TilesList(editorState: widget.editorState)
                 : _selectedTab == 1
-                    ? _ObjectsList(editorState: widget.editorState)
+                    ? _ObjectsTab(editorState: widget.editorState)
                     : _AudioList(editorState: widget.editorState),
           ),
         ],
@@ -900,46 +901,160 @@ class _ObjectsListState extends State<_ObjectsList> {
 
   void _rebuild() => setState(() {});
 
-  Future<void> _importSprite(GameObjectType type) async {
+  /// Adds a new variant (or replaces variant 0 if none exist yet).
+  Widget _variantRow(GameObjectType type, int vi, int activeVariant, dynamic cache) {
+    final es = widget.editorState;
+    final isActive = vi == activeVariant;
+    final name = es.mapData.getVariantName(type, vi);
+    final paths = cache.objVariantPathsList(type) as List<String>;
+
+    return GestureDetector(
+      onTap: () => setState(() => es.selectedVariantIndex[type] = vi),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+        decoration: BoxDecoration(
+          color: isActive ? AppColors.accent.withOpacity(0.1) : Colors.transparent,
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(
+            color: isActive ? AppColors.accent : Colors.transparent,
+          ),
+        ),
+        child: Row(
+          children: [
+            // Sprite thumbnail
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(color: AppColors.borderColor),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: paths.length > vi
+                    ? Image.file(File(paths[vi]), fit: BoxFit.cover)
+                    : Container(color: type.color,
+                        child: Icon(type.icon, size: 14, color: Colors.white)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Name
+            Expanded(
+              child: Text(
+                name,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isActive ? AppColors.textPrimary : AppColors.textSecondary,
+                ),
+              ),
+            ),
+            // Rename button
+            GestureDetector(
+              onTap: () => _renameVariant(type, vi, name),
+              child: const Padding(
+                padding: EdgeInsets.all(3),
+                child: Icon(Icons.edit_outlined, size: 12, color: AppColors.textMuted),
+              ),
+            ),
+            // Remove button
+            GestureDetector(
+              onTap: () => _removeVariant(type, vi),
+              child: const Padding(
+                padding: EdgeInsets.all(3),
+                child: Icon(Icons.close, size: 12, color: AppColors.textMuted),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _renameVariant(GameObjectType type, int vi, String current) async {
+    final ctrl = TextEditingController(text: current);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.dialogBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: AppColors.borderColor),
+        ),
+        title: const Text('Rename Variant',
+            style: TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
+          decoration: InputDecoration(
+            hintText: 'e.g. Goblin',
+            hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 13),
+            filled: true,
+            fillColor: AppColors.surfaceBg,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: AppColors.borderColor)),
+          ),
+          onSubmitted: (v) => Navigator.pop(context, v.trim()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary))),
+          TextButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+              child: const Text('Rename', style: TextStyle(color: AppColors.accent))),
+        ],
+      ),
+    );
+    if (newName == null || newName.isEmpty) return;
+    widget.editorState.mapData.setVariantName(type, vi, newName);
+    widget.editorState.notifyMapChanged();
+    setState(() {});
+  }
+
+  Future<void> _addVariant(GameObjectType type) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['png', 'jpg', 'jpeg', 'webp'],
     );
     if (result == null || result.files.single.path == null) return;
     final path = result.files.single.path!;
-    final ok = await widget.editorState.spriteCache.loadSprite(type, path);
-    if (ok) {
-      widget.editorState.mapData.spritePaths[type.name] = path;
+    final es = widget.editorState;
+    final idx = await es.spriteCache.addObjectVariant(type, path);
+    if (idx != null) {
+      _syncVariantPaths(type);
       setState(() {});
     }
   }
 
-  void _removeSprite(GameObjectType type) {
-    widget.editorState.spriteCache.removeSprite(type);
-    widget.editorState.mapData.spritePaths.remove(type.name);
+  void _removeVariant(GameObjectType type, int index) {
+    final es = widget.editorState;
+    es.spriteCache.removeObjectVariant(type, index);
+    // Clamp selected variant if it was pointing past the end
+    final count = es.spriteCache.objVariantCount(type);
+    if ((es.selectedVariantIndex[type] ?? 0) >= count) {
+      es.selectedVariantIndex[type] = (count - 1).clamp(0, 99);
+    }
+    _syncVariantPaths(type);
     setState(() {});
   }
 
-  Future<void> _openAnimations(GameObjectType type) async {
-    await AnimationsDialog.show(
-      context,
-      type: type,
-      spriteCache: widget.editorState.spriteCache,
-      mapData: widget.editorState.mapData,
-      onChanged: () => setState(() {}),
-    );
-    setState(() {});
+  void _syncVariantPaths(GameObjectType type) {
+    final es = widget.editorState;
+    final paths = es.spriteCache.objVariantPathsList(type);
+    es.mapData.objectVariantPaths[type.name] = List.from(paths);
+    // Keep spritePaths (variant 0) in sync for backward compat
+    if (paths.isNotEmpty) {
+      es.mapData.spritePaths[type.name] = paths[0];
+    } else {
+      es.mapData.spritePaths.remove(type.name);
+      es.mapData.objectVariantPaths.remove(type.name);
+    }
+    es.notifyMapChanged();
   }
 
   String? _previewPath(GameObjectType type) {
     final cache = widget.editorState.spriteCache;
-    if (cache.isAnimated(type)) {
-      final def = cache.defaultAnim(type);
-      if (def.isNotEmpty) {
-        final paths = cache.getAnimPaths(type, def);
-        if (paths.isNotEmpty) return paths.first;
-      }
-    }
     return cache.getPath(type);
   }
 
@@ -954,13 +1069,16 @@ class _ObjectsListState extends State<_ObjectsList> {
       itemBuilder: (_, i) {
         final type = _types[i];
         final isSelected = selected == type;
-        final isAnim = cache.isAnimated(type);
-        final spritePath = cache.getPath(type);
         final preview = _previewPath(type);
-        final animCount = cache.animNames(type).length;
+        final variantCount = cache.objVariantCount(type);
+        final activeVariant = widget.editorState.selectedVariantIndex[type] ?? 0;
 
         return GestureDetector(
-          onTap: () => widget.editorState.selectedObjectType.value = type,
+          onTap: () {
+            widget.editorState.selectedObjectType.value = type;
+            // Clear selected instance so right panel shows this type's sprite/anim editor
+            widget.editorState.selectedObject.value = null;
+          },
           child: Container(
             margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(
@@ -981,24 +1099,17 @@ class _ObjectsListState extends State<_ObjectsList> {
                       horizontal: 10, vertical: 8),
                   child: Row(
                     children: [
-                      // Preview
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(3),
-                        child: preview != null
-                            ? Image.file(File(preview),
-                                width: 18, height: 18, fit: BoxFit.cover)
-                            : Container(
-                                width: 18,
-                                height: 18,
-                                decoration: BoxDecoration(
-                                  color: type.color,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Center(
-                                  child: Icon(type.icon,
-                                      color: Colors.white, size: 11),
-                                ),
-                              ),
+                      // Default icon (always, regardless of imported sprite)
+                      Container(
+                        width: 18,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          color: type.color,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: Icon(type.icon, color: Colors.white, size: 11),
+                        ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
@@ -1015,15 +1126,6 @@ class _ObjectsListState extends State<_ObjectsList> {
                             style: TextStyle(
                                 color: AppColors.textMuted,
                                 fontSize: 10)),
-                      // Anim badge (when not selected)
-                      if (!isSelected && isAnim) ...[
-                        const SizedBox(width: 4),
-                        Tooltip(
-                          message: '$animCount animation${animCount == 1 ? '' : 's'}',
-                          child: const Icon(Icons.movie_outlined,
-                              size: 12, color: AppColors.accent),
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -1031,83 +1133,60 @@ class _ObjectsListState extends State<_ObjectsList> {
                 // Expanded actions (when selected)
                 if (isSelected) ...[
                   Padding(
-                    padding:
-                        const EdgeInsets.only(left: 10, right: 10, bottom: 8),
+                    padding: const EdgeInsets.only(left: 10, right: 10, bottom: 8),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Static sprite row
-                        GestureDetector(
-                          onTap: () => spritePath != null
-                              ? _removeSprite(type)
-                              : _importSprite(type),
-                          child: Row(
+                        // ── Variant list with names ───────────────────────
+                        if (variantCount > 0) ...[
+                          Column(
                             children: [
-                              Icon(
-                                spritePath != null
-                                    ? Icons.close
-                                    : Icons.image_outlined,
-                                size: 13,
-                                color: spritePath != null
-                                    ? AppColors.error
-                                    : AppColors.textSecondary,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                spritePath != null
-                                    ? 'Remove static sprite'
-                                    : 'Import static sprite',
-                                style: TextStyle(
-                                    color: spritePath != null
-                                        ? AppColors.error
-                                        : AppColors.textSecondary,
-                                    fontSize: 11),
+                              for (int vi = 0; vi < variantCount; vi++)
+                                _variantRow(type, vi, activeVariant, cache),
+                              // Add variant button
+                              GestureDetector(
+                                onTap: () => _addVariant(type),
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 28,
+                                        height: 28,
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: Border.all(color: AppColors.borderColor),
+                                        ),
+                                        child: const Icon(Icons.add, size: 14, color: AppColors.textMuted),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text('Add New ${type.label}',
+                                          style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ],
                           ),
-                        ),
-                        const SizedBox(height: 6),
-                        // Animations button
-                        GestureDetector(
-                          onTap: () => _openAnimations(type),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: isAnim
-                                  ? AppColors.accent.withOpacity(0.12)
-                                  : AppColors.surfaceBg,
-                              borderRadius: BorderRadius.circular(5),
-                              border: Border.all(
-                                color: isAnim
-                                    ? AppColors.accent.withOpacity(0.5)
-                                    : AppColors.borderColor,
-                              ),
-                            ),
+                          const SizedBox(height: 6),
+                        ] else ...[
+                          // No variants yet — show add button
+                          GestureDetector(
+                            onTap: () => _addVariant(type),
                             child: Row(
-                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.movie_outlined,
-                                    size: 13,
-                                    color: isAnim
-                                        ? AppColors.accent
-                                        : AppColors.textSecondary),
-                                const SizedBox(width: 5),
-                                Text(
-                                  isAnim
-                                      ? '$animCount animation${animCount == 1 ? '' : 's'}'
-                                      : 'Animations\u2026',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: isAnim
-                                        ? AppColors.accent
-                                        : AppColors.textSecondary,
-                                  ),
-                                ),
+                                const Icon(Icons.add,
+                                    size: 13, color: AppColors.textSecondary),
+                                const SizedBox(width: 4),
+                                Text('Add New ${type.label}',
+                                    style: const TextStyle(
+                                        color: AppColors.textSecondary,
+                                        fontSize: 11)),
                               ],
                             ),
                           ),
-                        ),
+                          const SizedBox(height: 6),
+                        ],
                       ],
                     ),
                   ),
@@ -1117,6 +1196,242 @@ class _ObjectsListState extends State<_ObjectsList> {
           ),
         );
       },
+    );
+  }
+}
+
+// ─── Objects Tab (type palette + instances) ────────────────────────────────────
+
+class _ObjectsTab extends StatelessWidget {
+  final EditorState editorState;
+  const _ObjectsTab({required this.editorState});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(child: _ObjectsList(editorState: editorState)),
+        _InstancesSection(editorState: editorState),
+      ],
+    );
+  }
+}
+
+// ─── Instances Section ─────────────────────────────────────────────────────────
+
+class _InstancesSection extends StatefulWidget {
+  final EditorState editorState;
+  const _InstancesSection({required this.editorState});
+
+  @override
+  State<_InstancesSection> createState() => _InstancesSectionState();
+}
+
+class _InstancesSectionState extends State<_InstancesSection> {
+  bool _expanded = true;
+
+  EditorState get _es => widget.editorState;
+  EditorGame get _game => _es.game;
+
+  @override
+  void initState() {
+    super.initState();
+    _es.mapChanged.addListener(_rebuild);
+    _es.selectedObject.addListener(_rebuild);
+  }
+
+  @override
+  void dispose() {
+    _es.mapChanged.removeListener(_rebuild);
+    _es.selectedObject.removeListener(_rebuild);
+    super.dispose();
+  }
+
+  void _rebuild() => setState(() {});
+
+  void _select(GameObject obj) {
+    _es.selectedObject.value = obj;
+    _game.setSelectedObject(obj.id);
+    _es.activeTool.value = EditorTool.object;
+  }
+
+  void _duplicate(GameObject obj) {
+    final copy = _game.duplicateObject(obj, _es);
+    _es.selectedObject.value = copy;
+    _game.setSelectedObject(copy.id);
+    _es.notifyMapChanged();
+  }
+
+  void _delete(GameObject obj) {
+    _es.pushUndo();
+    _es.mapData.objects.remove(obj);
+    if (_es.selectedObject.value?.id == obj.id) {
+      _es.selectedObject.value = null;
+      _game.setSelectedObject(null);
+    }
+    _es.notifyMapChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final objects = _es.mapData.objects;
+    final selectedId = _es.selectedObject.value?.id;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(height: 1, color: AppColors.borderColor),
+        // Header
+        GestureDetector(
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            color: AppColors.panelBg,
+            child: Row(
+              children: [
+                Icon(
+                  _expanded ? Icons.expand_more : Icons.chevron_right,
+                  size: 14,
+                  color: AppColors.textMuted,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'INSTANCES (${objects.length})',
+                  style: const TextStyle(
+                    color: AppColors.textMuted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_expanded)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 180),
+            child: objects.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 10),
+                    child: Center(
+                      child: Text(
+                        'No objects placed',
+                        style: TextStyle(
+                            color: AppColors.textMuted, fontSize: 11),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    itemCount: objects.length,
+                    itemBuilder: (_, i) {
+                      // Show in reverse so newest is at top
+                      final obj = objects[objects.length - 1 - i];
+                      final isSelected = obj.id == selectedId;
+                      final preview = _es.spriteCache.getPath(obj.type);
+
+                      return GestureDetector(
+                        onTap: () => _select(obj),
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 1),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? AppColors.accent.withOpacity(0.15)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(5),
+                            border: Border.all(
+                              color: isSelected
+                                  ? AppColors.accent
+                                  : Colors.transparent,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              // Type icon / sprite preview
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(3),
+                                child: preview != null
+                                    ? Image.file(File(preview),
+                                        width: 16,
+                                        height: 16,
+                                        fit: BoxFit.cover)
+                                    : Container(
+                                        width: 16,
+                                        height: 16,
+                                        decoration: BoxDecoration(
+                                          color: obj.type.color,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Center(
+                                          child: Icon(obj.type.icon,
+                                              color: Colors.white, size: 9),
+                                        ),
+                                      ),
+                              ),
+                              const SizedBox(width: 7),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      obj.name.isNotEmpty
+                                          ? obj.name
+                                          : obj.type.label,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isSelected
+                                            ? AppColors.textPrimary
+                                            : AppColors.textSecondary,
+                                        fontWeight: isSelected
+                                            ? FontWeight.w600
+                                            : FontWeight.normal,
+                                      ),
+                                    ),
+                                    Text(
+                                      '(${obj.tileX}, ${obj.tileY})',
+                                      style: const TextStyle(
+                                          color: AppColors.textMuted,
+                                          fontSize: 9),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              // Duplicate button
+                              GestureDetector(
+                                onTap: () => _duplicate(obj),
+                                child: const Tooltip(
+                                  message: 'Duplicate (Ctrl+D)',
+                                  child: Icon(Icons.copy_outlined,
+                                      size: 12,
+                                      color: AppColors.textMuted),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              // Delete button
+                              GestureDetector(
+                                onTap: () => _delete(obj),
+                                child: const Tooltip(
+                                  message: 'Remove',
+                                  child: Icon(Icons.close,
+                                      size: 12,
+                                      color: AppColors.textMuted),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+      ],
     );
   }
 }

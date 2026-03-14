@@ -54,6 +54,8 @@ class EditorState {
   final ValueNotifier<TileType> selectedTile;
   final ValueNotifier<int> selectedTileVariant;
   final ValueNotifier<GameObjectType> selectedObjectType;
+  /// Which sprite variant is "active" for placement per type. Mutable map, no notifier needed.
+  final Map<GameObjectType, int> selectedVariantIndex = {};
   final ValueNotifier<GameObject?> selectedObject;
   final ValueNotifier<EditorTool> activeTool;
   final ValueNotifier<(int, int)?> hoverTile;
@@ -64,6 +66,7 @@ class EditorState {
   final ValueNotifier<int> undoCount;
   final ValueNotifier<int> redoCount;
   final ValueNotifier<bool> isDirty;
+  final ValueNotifier<bool> sortEditMode;
 
   String get currentMapId => _currentMapId;
 
@@ -92,7 +95,8 @@ class EditorState {
         showGrid = ValueNotifier(true),
         undoCount = ValueNotifier(0),
         redoCount = ValueNotifier(0),
-        isDirty = ValueNotifier(false) {
+        isDirty = ValueNotifier(false),
+        sortEditMode = ValueNotifier(false) {
     game = EditorGame(mapData: mapData, spriteCache: spriteCache);
   }
 
@@ -176,7 +180,12 @@ class EditorState {
 
   Future<void> reloadSprites() async {
     spriteCache.clear();
-    await spriteCache.loadFromPaths(mapData.spritePaths);
+    // Load variants first (new format); fall back to single-sprite paths (old format)
+    if (mapData.objectVariantPaths.isNotEmpty) {
+      await spriteCache.loadObjVariantsFromPaths(mapData.objectVariantPaths);
+    } else {
+      await spriteCache.loadFromPaths(mapData.spritePaths);
+    }
     await spriteCache.loadTileFromPaths(mapData.tileSpritesPaths);
     await spriteCache.loadAnimFromPaths(mapData.animPaths, mapData.animFps, mapData.animDefaults);
     await spriteCache.loadAnimFromSheets(mapData.animSheets, mapData.animFps, mapData.animDefaults);
@@ -334,5 +343,6 @@ class EditorState {
     undoCount.dispose();
     redoCount.dispose();
     isDirty.dispose();
+    sortEditMode.dispose();
   }
 }

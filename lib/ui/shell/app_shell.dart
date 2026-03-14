@@ -130,19 +130,72 @@ class _AppShellState extends State<AppShell> with WindowListener {
     final pressed = HardwareKeyboard.instance.logicalKeysPressed;
     final isCtrl = pressed.contains(LogicalKeyboardKey.controlLeft) ||
         pressed.contains(LogicalKeyboardKey.controlRight);
-    if (!isCtrl) return false;
     final isShift = pressed.contains(LogicalKeyboardKey.shiftLeft) ||
         pressed.contains(LogicalKeyboardKey.shiftRight);
-    if (event.logicalKey == LogicalKeyboardKey.keyZ) {
-      if (isShift) {
-        _editorState.redo();
-      } else {
-        _editorState.undo();
+
+    // Ctrl+Z = undo, Ctrl+Shift+Z / Ctrl+Y = redo, Ctrl+D = duplicate
+    if (isCtrl) {
+      if (event.logicalKey == LogicalKeyboardKey.keyZ) {
+        if (isShift) { _editorState.redo(); } else { _editorState.undo(); }
+        return true;
       }
-      return true;
+      if (event.logicalKey == LogicalKeyboardKey.keyY) {
+        _editorState.redo();
+        return true;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.keyD) {
+        final sel = _editorState.selectedObject.value;
+        if (sel != null && _editorState.activeTool.value == EditorTool.object) {
+          final copy = _editorState.game.duplicateObject(sel, _editorState);
+          _editorState.selectedObject.value = copy;
+          _editorState.game.setSelectedObject(copy.id);
+          _editorState.notifyMapChanged();
+        }
+        return true;
+      }
     }
-    if (event.logicalKey == LogicalKeyboardKey.keyY) {
-      _editorState.redo();
+
+    // Arrow keys — move selected object (no modifier required)
+    final obj = _editorState.selectedObject.value;
+    if (obj != null && _editorState.activeTool.value == EditorTool.object) {
+      final isArrow = event.logicalKey == LogicalKeyboardKey.arrowLeft  ||
+                      event.logicalKey == LogicalKeyboardKey.arrowRight ||
+                      event.logicalKey == LogicalKeyboardKey.arrowUp    ||
+                      event.logicalKey == LogicalKeyboardKey.arrowDown;
+      if (!isArrow) return false;
+
+      if (event is KeyDownEvent) _editorState.pushUndo();
+
+      if (isShift) {
+        // Shift+Arrow: snap 1 tile, clear any sub-tile offset
+        int dx = 0, dy = 0;
+        if (event.logicalKey == LogicalKeyboardKey.arrowLeft)  dx = -1;
+        if (event.logicalKey == LogicalKeyboardKey.arrowRight) dx =  1;
+        if (event.logicalKey == LogicalKeyboardKey.arrowUp)    dy = -1;
+        if (event.logicalKey == LogicalKeyboardKey.arrowDown)  dy =  1;
+        obj.tileX = (obj.tileX + dx).clamp(0, _editorState.mapData.width  - 1);
+        obj.tileY = (obj.tileY + dy).clamp(0, _editorState.mapData.height - 1);
+        obj.offsetX = 0;
+        obj.offsetY = 0;
+      } else {
+        // Arrow alone: nudge 2 px for precise placement
+        const step = 2.0;
+        double dox = 0, doy = 0;
+        if (event.logicalKey == LogicalKeyboardKey.arrowLeft)  dox = -step;
+        if (event.logicalKey == LogicalKeyboardKey.arrowRight) dox =  step;
+        if (event.logicalKey == LogicalKeyboardKey.arrowUp)    doy = -step;
+        if (event.logicalKey == LogicalKeyboardKey.arrowDown)  doy =  step;
+        final ts = _editorState.mapData.tileSize.toDouble();
+        obj.offsetX += dox;
+        obj.offsetY += doy;
+        // Normalise: carry over to adjacent tile when offset exceeds ±half tile
+        while (obj.offsetX >=  ts / 2) { obj.tileX = (obj.tileX + 1).clamp(0, _editorState.mapData.width  - 1); obj.offsetX -= ts; }
+        while (obj.offsetX < -ts / 2) { obj.tileX = (obj.tileX - 1).clamp(0, _editorState.mapData.width  - 1); obj.offsetX += ts; }
+        while (obj.offsetY >=  ts / 2) { obj.tileY = (obj.tileY + 1).clamp(0, _editorState.mapData.height - 1); obj.offsetY -= ts; }
+        while (obj.offsetY < -ts / 2) { obj.tileY = (obj.tileY - 1).clamp(0, _editorState.mapData.height - 1); obj.offsetY += ts; }
+      }
+
+      _editorState.notifyMapChanged();
       return true;
     }
     return false;

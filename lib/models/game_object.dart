@@ -111,6 +111,12 @@ class GameObject {
   double dashDistance;     // tiles
   double dashSpeed;        // tiles/sec
   double dashInterval;     // seconds between dashes
+  bool useAnimation;       // true = show animation; false = show static variant sprite
+  int zOrder;              // render layer; lower = behind, higher = in front
+  double offsetX;          // sub-tile pixel offset from tile-centre (precise placement)
+  double offsetY;
+  double sortAnchorY;      // Y offset from sprite centre used as depth sort key (in tile units)
+  int variantIndex;        // which sprite variant (0 = default)
   Map<String, dynamic> properties;
 
   GameObject({
@@ -140,6 +146,12 @@ class GameObject {
     this.dashDistance = 2.0,
     this.dashSpeed = 8.0,
     this.dashInterval = 2.0,
+    this.useAnimation = false,
+    this.zOrder = 0,
+    this.offsetX = 0.0,
+    this.offsetY = 0.0,
+    this.sortAnchorY = 0.0,
+    this.variantIndex = 0,
     Map<String, dynamic>? properties,
   })  : id = id ?? '${type.name}_${tileX}_${tileY}_${DateTime.now().microsecondsSinceEpoch}',
         name = name ?? type.label,
@@ -152,8 +164,24 @@ class GameObject {
             'speed': 2.0,
             'damage': 1,
             'patrolRange': 3,
+            'blockShape': 'circle',
+            'blockR': 0.38,
+            'blockW': 0.38,
+            'blockH': 0.38,
+            'blockRX': 0.38,
+            'blockRY': 0.38,
+            'sortPoints': <List<double>>[],
           },
-        GameObjectType.npc => {'dialog': 'Hello!'},
+        GameObjectType.npc => {
+            'dialog': 'Hello!',
+            'blockShape': 'circle',
+            'blockR': 0.38,
+            'blockW': 0.38,
+            'blockH': 0.38,
+            'blockRX': 0.38,
+            'blockRY': 0.38,
+            'sortPoints': <List<double>>[],
+          },
         GameObjectType.coin => {'value': 1},
         GameObjectType.chest => {'value': 10},
         GameObjectType.door => {
@@ -175,10 +203,27 @@ class GameObject {
           },
         GameObjectType.gem        => {'value': 1},
         GameObjectType.collectible => {'value': 1},
-        GameObjectType.prop       => {'solid': true},
+        GameObjectType.prop       => {
+            'solid': true,
+            'blockShape': 'rect', // 'rect' | 'circle' | 'ellipse'
+            'blockW': 1.0,        // rect half-width in tile units (→ actual px = blockW * tileSize)
+            'blockH': 1.0,        // rect half-height in tile units
+            'blockR': 0.5,        // circle radius in tile units
+            'blockRX': 0.5,       // ellipse x-radius in tile units
+            'blockRY': 0.5,       // ellipse y-radius in tile units
+            'sortPoints': <List<double>>[],
+          },
         GameObjectType.hazard     => {'damage': 1.0, 'knockback': false},
         GameObjectType.checkpoint   => {},
-        GameObjectType.playerSpawn  => {},
+        GameObjectType.playerSpawn  => {
+            'blockShape': 'circle',
+            'blockR': 0.35,
+            'blockW': 0.35,
+            'blockH': 0.35,
+            'blockRX': 0.35,
+            'blockRY': 0.35,
+            'sortPoints': <List<double>>[],
+          },
         GameObjectType.weaponPickup => {'itemId': ''},
       };
 
@@ -209,6 +254,12 @@ class GameObject {
         'dashDistance': dashDistance,
         'dashSpeed': dashSpeed,
         'dashInterval': dashInterval,
+        if (useAnimation) 'useAnimation': true,
+        'zOrder': zOrder,
+        if (offsetX != 0.0) 'offsetX': offsetX,
+        if (offsetY != 0.0) 'offsetY': offsetY,
+        if (sortAnchorY != 0.0) 'sortAnchorY': sortAnchorY,
+        if (variantIndex != 0) 'variantIndex': variantIndex,
         'properties': properties,
       };
 
@@ -245,6 +296,12 @@ class GameObject {
       dashDistance: (json['dashDistance'] as num?)?.toDouble() ?? 2.0,
       dashSpeed: (json['dashSpeed'] as num?)?.toDouble() ?? 8.0,
       dashInterval: (json['dashInterval'] as num?)?.toDouble() ?? 2.0,
+      useAnimation: json['useAnimation'] as bool? ?? false,
+      zOrder: json['zOrder'] as int? ?? 0,
+      offsetX: (json['offsetX'] as num?)?.toDouble() ?? 0.0,
+      offsetY: (json['offsetY'] as num?)?.toDouble() ?? 0.0,
+      sortAnchorY: (json['sortAnchorY'] as num?)?.toDouble() ?? 0.0,
+      variantIndex: json['variantIndex'] as int? ?? 0,
       properties: merged,
     );
   }

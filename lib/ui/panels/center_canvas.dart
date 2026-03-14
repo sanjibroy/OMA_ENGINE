@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../editor/editor_game.dart'; // needed for _ZoomControls type ref
 import '../../editor/editor_state.dart';
+import '../../models/game_object.dart';
 import '../../models/map_data.dart';
 import '../../theme/app_theme.dart';
 
@@ -26,6 +27,9 @@ class _CenterCanvasState extends State<CenterCanvas> {
   Offset? _rectStart;   // screen pos where rectangle fill drag began
   Offset? _rectCurrent; // current drag pos (for preview)
   bool _lastRectErase = false;
+  MouseCursor _cursor = SystemMouseCursors.precise;
+  GameObject? _draggedObject;      // object currently being dragged
+  bool _dragUndoPushed = false;    // undo pushed lazily on first tile change
 
   // HUD state (updated by game callbacks)
   int _health = 100;
@@ -37,6 +41,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
   String? _equippedItemName;
   bool _isGameOver = false;
   bool _isWin = false;
+  bool _debugCollision = false;
 
   EditorState get _state => widget.editorState;
 
@@ -65,6 +70,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _state.showGrid.addListener(_onShowGridChanged);
     _state.activeTool.addListener(_onActiveToolChanged);
     _state.projectChanged.addListener(_onProjectChanged);
+    _state.sortEditMode.addListener(_onSortEditModeChanged);
   }
 
   @override
@@ -73,6 +79,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _state.showGrid.removeListener(_onShowGridChanged);
     _state.activeTool.removeListener(_onActiveToolChanged);
     _state.projectChanged.removeListener(_onProjectChanged);
+    _state.sortEditMode.removeListener(_onSortEditModeChanged);
     _game.onHudUpdate = null;
     _game.onMessage = null;
     _game.onGameEvent = null;
@@ -91,8 +98,14 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _game.setShowCollision(_state.activeTool.value == EditorTool.collision);
   }
 
+  void _onSortEditModeChanged() {
+    _game.objectsComponent?.sortEditMode = _state.sortEditMode.value;
+    setState(() {});
+  }
+
   void _onPlayModeChanged() {
     if (_state.isPlayMode.value) {
+      _state.sortEditMode.value = false;
       setState(() {
         _health = 100;
         _score = 0;
@@ -126,8 +139,13 @@ class _CenterCanvasState extends State<CenterCanvas> {
       // instances, so selectedObject would point to a dead reference.
       _state.selectedObject.value = null;
       _game.setSelectedObject(null);
-      // Restore collision overlay if collision tool is still active
-      _game.setShowCollision(_state.activeTool.value == EditorTool.collision);
+      // Reset to object tool so mouse doesn't accidentally paint tiles.
+      _state.activeTool.value = EditorTool.object;
+      _game.setShowCollision(false);
+      setState(() {
+        _cursor = SystemMouseCursors.precise;
+        _debugCollision = false;
+      });
     }
   }
 
@@ -257,12 +275,32 @@ class _CenterCanvasState extends State<CenterCanvas> {
       _state.notifyMapChanged();
     } else {
       // object tool
+      if (_state.sortEditMode.value) {
+        // Sort edit: left click adds polygon point, right click removes nearest
+        // Works for props (sort region), player, enemy, and NPC (collider polygon)
+        final sel = _state.selectedObject.value;
+        if (sel != null && _supportsPolygonEdit(sel)) {
+          if (e.buttons == kPrimaryMouseButton) {
+            _addSortPoint(e.localPosition, sel);
+          } else if (e.buttons == kSecondaryMouseButton) {
+            _removeSortPoint(e.localPosition, sel);
+          }
+        }
+        return;
+      }
       if (e.buttons == kPrimaryMouseButton) {
         final existing = _game.objectAt(e.localPosition);
         if (existing != null) {
+          // Select and begin drag
           _state.selectedObject.value = existing;
           _game.setSelectedObject(existing.id);
+          _draggedObject = existing;
+          _dragUndoPushed = false;
+          if (!_supportsPolygonEdit(existing)) {
+            _state.sortEditMode.value = false;
+          }
         } else {
+          // Place new object
           final placed = _game.placeObject(
               e.localPosition, _state.selectedObjectType.value, _state,
               inheritFrom: _state.selectedObject.value);
@@ -273,6 +311,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
         _game.removeObjectAt(e.localPosition, _state);
         _state.selectedObject.value = null;
         _game.setSelectedObject(null);
+        _draggedObject = null;
       }
     }
   }
@@ -295,7 +334,37 @@ class _CenterCanvasState extends State<CenterCanvas> {
     if (_rectStart != null) {
       setState(() => _rectCurrent = e.localPosition);
     }
+    // Drag selected object to new tile
+    if (_draggedObject != null) {
+      final tile = _game.screenToTile(e.localPosition);
+      if (tile != null &&
+          (tile.$1 != _draggedObject!.tileX || tile.$2 != _draggedObject!.tileY)) {
+        if (!_dragUndoPushed) {
+          _state.pushUndo();
+          _dragUndoPushed = true;
+        }
+        _draggedObject!.tileX = tile.$1;
+        _draggedObject!.tileY = tile.$2;
+        _state.notifyMapChanged();
+      }
+    }
     _state.hoverTile.value = _game.screenToTile(e.localPosition);
+    _updateCursor(e.localPosition);
+  }
+
+  void _updateCursor(Offset pos) {
+    final tool = _state.activeTool.value;
+    MouseCursor next;
+    if (_state.sortEditMode.value) {
+      next = SystemMouseCursors.precise;
+    } else if (tool == EditorTool.object) {
+      next = (_draggedObject != null || _game.objectAt(pos) != null)
+          ? SystemMouseCursors.move
+          : SystemMouseCursors.click;
+    } else {
+      next = SystemMouseCursors.precise;
+    }
+    if (next != _cursor) setState(() => _cursor = next);
   }
 
   void _onPointerUp(PointerUpEvent e) {
@@ -316,6 +385,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _isPanning = false;
     _isPainting = false;
     _isErasing = false;
+    _draggedObject = null;
   }
 
   void _onPointerExit(PointerExitEvent e) {
@@ -329,6 +399,69 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _state.hoverTile.value = null;
   }
 
+  /// Returns true for object types that support polygon editing via sortEditMode.
+  bool _supportsPolygonEdit(GameObject obj) =>
+      obj.type == GameObjectType.prop ||
+      obj.type == GameObjectType.playerSpawn ||
+      obj.type == GameObjectType.enemy ||
+      obj.type == GameObjectType.npc;
+
+  void _addSortPoint(Offset screenPos, GameObject obj) {
+    final cam = _game.editorCamera;
+    if (cam == null) return;
+    final ts = _state.mapData.tileSize.toDouble();
+    final wx = cam.viewfinder.position.x + screenPos.dx / cam.viewfinder.zoom;
+    final wy = cam.viewfinder.position.y + screenPos.dy / cam.viewfinder.zoom;
+    final cx = (obj.tileX + 0.5) * ts + obj.offsetX;
+    final cy = (obj.tileY + 0.5) * ts + obj.offsetY;
+    final dx = (wx - cx) / ts;
+    final dy = (wy - cy) / ts;
+    _state.pushUndo();
+    final pts = _getSortPoints(obj);
+    pts.add([dx, dy]);
+    obj.properties['sortPoints'] = pts;
+    _state.notifyMapChanged();
+  }
+
+  void _removeSortPoint(Offset screenPos, GameObject obj) {
+    final cam = _game.editorCamera;
+    if (cam == null) return;
+    final ts = _state.mapData.tileSize.toDouble();
+    final wx = cam.viewfinder.position.x + screenPos.dx / cam.viewfinder.zoom;
+    final wy = cam.viewfinder.position.y + screenPos.dy / cam.viewfinder.zoom;
+    final cx = (obj.tileX + 0.5) * ts + obj.offsetX;
+    final cy = (obj.tileY + 0.5) * ts + obj.offsetY;
+    final pts = _getSortPoints(obj);
+    if (pts.isEmpty) return;
+    double minDist = double.infinity;
+    int minIdx = -1;
+    for (int i = 0; i < pts.length; i++) {
+      final px = cx + pts[i][0] * ts;
+      final py = cy + pts[i][1] * ts;
+      final d = (Offset(px, py) - Offset(wx, wy)).distance;
+      if (d < minDist) { minDist = d; minIdx = i; }
+    }
+    if (minIdx >= 0) {
+      _state.pushUndo();
+      pts.removeAt(minIdx);
+      obj.properties['sortPoints'] = pts;
+      _state.notifyMapChanged();
+    }
+  }
+
+  List<List<double>> _getSortPoints(GameObject obj) {
+    final raw = obj.properties['sortPoints'];
+    if (raw is List) {
+      return raw.map<List<double>>((p) {
+        if (p is List && p.length >= 2) {
+          return [(p[0] as num).toDouble(), (p[1] as num).toDouble()];
+        }
+        return [0.0, 0.0];
+      }).toList();
+    }
+    return [];
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
@@ -340,6 +473,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
           onPointerUp: _onPointerUp,
           onPointerCancel: (_) {
             _isPanning = _isPainting = _isErasing = false;
+            _draggedObject = null;
             setState(() {
               _rectStart = null;
               _rectCurrent = null;
@@ -348,9 +482,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
           },
           child: MouseRegion(
             onExit: _onPointerExit,
-            cursor: isPlay
-                ? SystemMouseCursors.basic
-                : SystemMouseCursors.precise,
+            cursor: isPlay ? SystemMouseCursors.basic : _cursor,
             child: Column(
               children: [
                 // ── HUD strip (top position) ─────────────────
@@ -403,6 +535,43 @@ class _CenterCanvasState extends State<CenterCanvas> {
                                 ),
                               ),
                             ),
+
+                          // Debug collision toggle button
+                          Positioned(
+                            right: 10,
+                            top: 10,
+                            child: Tooltip(
+                              message: 'Toggle collision debug',
+                              child: GestureDetector(
+                                onTap: () {
+                                  setState(() => _debugCollision = !_debugCollision);
+                                  _game.playSession?.debugCollision = _debugCollision;
+                                },
+                                child: Container(
+                                  width: 30,
+                                  height: 30,
+                                  decoration: BoxDecoration(
+                                    color: _debugCollision
+                                        ? const Color(0xFF00E5FF).withOpacity(0.25)
+                                        : Colors.black45,
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: _debugCollision
+                                          ? const Color(0xFF00E5FF)
+                                          : Colors.white24,
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    Icons.bug_report_outlined,
+                                    size: 18,
+                                    color: _debugCollision
+                                        ? const Color(0xFF00E5FF)
+                                        : Colors.white54,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
 
                           // Game over / win full-screen overlay
                           if (_isGameOver || _isWin)

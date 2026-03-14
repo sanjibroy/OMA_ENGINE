@@ -1,4 +1,5 @@
 import 'dart:math' show max;
+import 'dart:ui' as ui;
 import '../models/game_effect.dart';
 import '../models/item_def.dart';
 import 'package:flame/camera.dart';
@@ -109,6 +110,12 @@ class EditorGame extends FlameGame with ScrollDetector {
               dashDistance: o.dashDistance,
               dashSpeed: o.dashSpeed,
               dashInterval: o.dashInterval,
+              zOrder: o.zOrder,
+              offsetX: o.offsetX,
+              offsetY: o.offsetY,
+              sortAnchorY: o.sortAnchorY,
+              useAnimation: o.useAnimation,
+              variantIndex: o.variantIndex,
               properties: Map<String, dynamic>.from(o.properties),
             ))
         .toList();
@@ -283,6 +290,9 @@ class EditorGame extends FlameGame with ScrollDetector {
   }
 
   double get currentZoom => _camera?.viewfinder.zoom ?? 1.0;
+  CameraComponent? get editorCamera => _camera;
+  ObjectsComponent? get objectsComponent => _objectsComponent;
+  PlaySession? get playSession => _playSession;
 
   void zoomBy(double factor) {
     if (_camera == null) return;
@@ -391,32 +401,123 @@ class EditorGame extends FlameGame with ScrollDetector {
       type: type,
       tileX: tile.$1,
       tileY: tile.$2,
+      name: _autoName(type, es.selectedVariantIndex[type] ?? 0),
       scale: ref?.scale ?? 1.0,
       rotation: ref?.rotation ?? 0.0,
       flipH: ref?.flipH ?? false,
       flipV: ref?.flipV ?? false,
+      useAnimation: false, // set via instance properties in right panel if needed
+      variantIndex: es.selectedVariantIndex[type] ?? 0,
     );
     mapData.objects.add(obj);
     return obj;
   }
 
+  /// Returns the topmost object whose sprite AABB contains the screen position.
+  /// Water-body objects use tile-based hit-testing (they fill exactly one tile).
   GameObject? objectAt(Offset screenPos) {
-    final tile = screenToTile(screenPos);
-    if (tile == null) return null;
-    try {
-      return mapData.objects
-          .firstWhere((o) => o.tileX == tile.$1 && o.tileY == tile.$2);
-    } catch (_) {
-      return null;
+    if (_camera == null) return null;
+    final cam = _camera!;
+    final ts = mapData.tileSize.toDouble();
+    final wx = cam.viewfinder.position.x + screenPos.dx / cam.viewfinder.zoom;
+    final wy = cam.viewfinder.position.y + screenPos.dy / cam.viewfinder.zoom;
+
+    // Water bodies: tile-based
+    final tx = (wx / ts).floor();
+    final ty = (wy / ts).floor();
+    for (final obj in mapData.objects.reversed) {
+      if (obj.type == GameObjectType.waterBody &&
+          obj.tileX == tx && obj.tileY == ty) return obj;
     }
+
+    // All other objects: AABB using actual sprite dimensions.
+    // Iterate in reverse render order so the topmost sprite is checked first.
+    final sorted = mapData.objects
+        .where((o) => o.type != GameObjectType.waterBody)
+        .toList()
+      ..sort((a, b) {
+          final zCmp = a.zOrder.compareTo(b.zOrder);
+          if (zCmp != 0) return zCmp;
+          return mapData.ySortEnabled ? a.tileY.compareTo(b.tileY) : 0;
+        });
+    for (final obj in sorted.reversed) {
+      final cx = (obj.tileX + 0.5) * ts + obj.offsetX;
+      final cy = (obj.tileY + 0.5) * ts + obj.offsetY;
+      ui.Image? img;
+      if (obj.useAnimation && spriteCache.isAnimated(obj.type, obj.variantIndex)) {
+        final animName = spriteCache.defaultAnim(obj.type, obj.variantIndex);
+        if (animName.isNotEmpty &&
+            spriteCache.animFrameCount(obj.type, obj.variantIndex, animName) > 0) {
+          img = spriteCache.getAnimFrame(obj.type, obj.variantIndex, animName, 0);
+        }
+      }
+      img ??= spriteCache.getImage(obj.type);
+      final halfW = (img != null ? img.width * obj.scale : ts) / 2;
+      final halfH = (img != null ? img.height * obj.scale : ts) / 2;
+      if (wx >= cx - halfW && wx <= cx + halfW &&
+          wy >= cy - halfH && wy <= cy + halfH) {
+        return obj;
+      }
+    }
+    return null;
   }
 
   void removeObjectAt(Offset screenPos, EditorState es) {
-    final tile = screenToTile(screenPos);
-    if (tile == null) return;
+    final obj = objectAt(screenPos);
+    if (obj == null) return;
     es.pushUndo();
-    mapData.objects
-        .removeWhere((o) => o.tileX == tile.$1 && o.tileY == tile.$2);
+    mapData.objects.remove(obj);
+  }
+
+  /// Duplicates [src], placing the copy one tile to the right (or below if at
+  /// the map edge). Returns the new object so the caller can select it.
+  GameObject duplicateObject(GameObject src, EditorState es) {
+    es.pushUndo();
+    final newTileX = (src.tileX + 1).clamp(0, mapData.width  - 1);
+    final newTileY = newTileX == src.tileX
+        ? (src.tileY + 1).clamp(0, mapData.height - 1)
+        : src.tileY;
+    final copy = GameObject(
+      type: src.type,
+      tileX: newTileX,
+      tileY: newTileY,
+      name: _autoName(src.type, src.variantIndex),
+      flipH: src.flipH,
+      flipV: src.flipV,
+      scale: src.scale,
+      rotation: src.rotation,
+      hidden: src.hidden,
+      alpha: src.alpha,
+      tag: src.tag,
+      floatEnabled: src.floatEnabled,
+      floatAmplitude: src.floatAmplitude,
+      floatSpeed: src.floatSpeed,
+      projectileEnabled: src.projectileEnabled,
+      projectileLoop: src.projectileLoop,
+      projectileAngle: src.projectileAngle,
+      projectileSpeed: src.projectileSpeed,
+      projectileRange: src.projectileRange,
+      projectileArc: src.projectileArc,
+      dashEnabled: src.dashEnabled,
+      dashAngle: src.dashAngle,
+      dashDistance: src.dashDistance,
+      dashSpeed: src.dashSpeed,
+      dashInterval: src.dashInterval,
+      zOrder: src.zOrder,
+      offsetX: src.offsetX,
+      offsetY: src.offsetY,
+      properties: Map<String, dynamic>.from(src.properties),
+    );
+    mapData.objects.add(copy);
+    return copy;
+  }
+
+  String _autoName(GameObjectType type, [int variantIndex = 0]) {
+    final base = mapData.getVariantName(type, variantIndex);
+    final existing = mapData.objects.map((o) => o.name).toSet();
+    int n = 1;
+    while (existing.contains('$base $n')) n++;
+    return '$base $n';
   }
 
   void setSelectedObject(String? id) {

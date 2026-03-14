@@ -1,4 +1,4 @@
-import 'dart:math' show pi, sin, cos, atan2, Random;
+import 'dart:math' show pi, sin, cos, atan2, sqrt, max, Random;
 import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
@@ -175,11 +175,20 @@ class PlaySession {
   final void Function(String event) onGameEvent;
   final void Function(String? name)? onEquippedItemChanged;
 
+  bool debugCollision = false;
+
   late Vector2 _playerPos;
   bool _playerFlipH = false;
   bool _playerFlipV = false;
   double _playerScale = 1.0;
   double _playerRotation = 0.0;
+  String _playerColliderShape = 'circle';
+  double _playerColliderR = 0.35;
+  double _playerColliderW = 0.35;
+  double _playerColliderH = 0.35;
+  double _playerColliderRX = 0.35;
+  double _playerColliderRY = 0.35;
+  List<List<double>> _playerColliderPoly = [];
   int _health = 100;
   int _score = 0;
   int _coinCount = 0;
@@ -312,6 +321,16 @@ class PlaySession {
     _playerFlipV = spawn?.flipV ?? false;
     _playerScale = spawn?.scale ?? 1.0;
     _playerRotation = spawn?.rotation ?? 0.0;
+    _playerColliderShape = spawn?.properties['blockShape'] as String? ?? 'circle';
+    _playerColliderR  = (spawn?.properties['blockR']  as num?)?.toDouble() ?? 0.35;
+    _playerColliderW  = (spawn?.properties['blockW']  as num?)?.toDouble() ?? 0.35;
+    _playerColliderH  = (spawn?.properties['blockH']  as num?)?.toDouble() ?? 0.35;
+    _playerColliderRX = (spawn?.properties['blockRX'] as num?)?.toDouble() ?? 0.35;
+    _playerColliderRY = (spawn?.properties['blockRY'] as num?)?.toDouble() ?? 0.35;
+    final rawPoly = spawn?.properties['sortPoints'];
+    _playerColliderPoly = rawPoly is List
+        ? rawPoly.whereType<List>().map((p) => p.cast<double>()).toList()
+        : [];
 
     // Init enemies from map objects
     for (final obj in mapData.objects.where((o) => o.type == GameObjectType.enemy)) {
@@ -604,16 +623,16 @@ class PlaySession {
 
   // ─── Collision ────────────────────────────────────────────────────────────
 
-  /// Returns true if a point (px, py) in world-space is inside a solid tile.
+  /// Returns true if a point (px, py) hits a solid tile or block-mode water.
+  /// Does NOT check solid props — use [_propSolidAt] for that.
   bool _solidAt(double px, double py) {
     final ts = mapData.tileSize.toDouble();
     final tx = (px / ts).floor().clamp(0, mapData.width - 1);
     final ty = (py / ts).floor().clamp(0, mapData.height - 1);
     final col = mapData.getTileCollision(tx, ty);
-    if (col == 1) return false; // force passable
-    if (col == 2) return true;  // force solid
+    if (col == 1) return false;
+    if (col == 2) return true;
     if (mapData.getTile(tx, ty).isSolid) return true;
-    // Block-mode water zones act as solid walls
     for (final obj in mapData.objects) {
       if (_hiddenObjectIds.contains(obj.id)) continue;
       if (obj.tileX != tx || obj.tileY != ty) continue;
@@ -621,21 +640,174 @@ class PlaySession {
           (obj.properties['waterMode'] as String? ?? 'wade') == 'block') {
         return true;
       }
-      if (obj.type == GameObjectType.prop &&
-          (obj.properties['solid'] as bool? ?? true)) {
-        return true;
+    }
+    return false;
+  }
+
+  /// Returns true if a point (px, py) is inside a solid prop's collision shape.
+  bool _propSolidAt(double px, double py) {
+    final ts = mapData.tileSize.toDouble();
+    for (final obj in mapData.objects) {
+      if (_hiddenObjectIds.contains(obj.id)) continue;
+      if (obj.type != GameObjectType.prop) continue;
+      if (!(obj.properties['solid'] as bool? ?? true)) continue;
+      final cx = (obj.tileX + 0.5) * ts + obj.offsetX;
+      final cy = (obj.tileY + 0.5) * ts + obj.offsetY;
+      final shape = obj.properties['blockShape'] as String? ?? 'rect';
+      switch (shape) {
+        case 'circle':
+          final r = ((obj.properties['blockR'] as num?)?.toDouble() ?? 0.5) * ts;
+          final dx = px - cx, dy = py - cy;
+          if (dx * dx + dy * dy <= r * r) return true;
+        case 'ellipse':
+          final rx = ((obj.properties['blockRX'] as num?)?.toDouble() ?? 0.5) * ts;
+          final ry = ((obj.properties['blockRY'] as num?)?.toDouble() ?? 0.5) * ts;
+          final dx = px - cx, dy = py - cy;
+          if (rx > 0 && ry > 0 &&
+              (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1.0) return true;
+        case 'custom':
+          if (_pointInSortPolygon(px, py, obj, cx, cy, ts)) return true;
+        default: // 'rect'
+          final hw = ((obj.properties['blockW'] as num?)?.toDouble() ?? 1.0) * ts / 2;
+          final hh = ((obj.properties['blockH'] as num?)?.toDouble() ?? 1.0) * ts / 2;
+          if (px >= cx - hw && px < cx + hw && py >= cy - hh && py < cy + hh) return true;
       }
     }
     return false;
   }
 
-  /// Returns true if the player bounding box at (cx, cy) overlaps a solid tile.
+  /// Returns a list of sample points on/inside the player collider at (cx,cy).
+  List<(double, double)> _playerColliderPoints(double cx, double cy) {
+    final ts = mapData.tileSize.toDouble();
+    switch (_playerColliderShape) {
+      case 'circle':
+        final r = _playerColliderR * ts;
+        return [
+          (cx, cy), (cx, cy - r), (cx, cy + r), (cx - r, cy), (cx + r, cy),
+          (cx - r * 0.707, cy - r * 0.707), (cx + r * 0.707, cy - r * 0.707),
+          (cx - r * 0.707, cy + r * 0.707), (cx + r * 0.707, cy + r * 0.707),
+        ];
+      case 'ellipse':
+        final rx = _playerColliderRX * ts;
+        final ry = _playerColliderRY * ts;
+        return [
+          (cx, cy), (cx, cy - ry), (cx, cy + ry), (cx - rx, cy), (cx + rx, cy),
+          (cx - rx * 0.707, cy - ry * 0.707), (cx + rx * 0.707, cy - ry * 0.707),
+          (cx - rx * 0.707, cy + ry * 0.707), (cx + rx * 0.707, cy + ry * 0.707),
+        ];
+      case 'rect':
+        final hw = _playerColliderW * ts;
+        final hh = _playerColliderH * ts;
+        return [
+          (cx, cy),
+          (cx - hw, cy - hh), (cx + hw, cy - hh),
+          (cx - hw, cy + hh), (cx + hw, cy + hh),
+          (cx, cy - hh), (cx, cy + hh), (cx - hw, cy), (cx + hw, cy),
+        ];
+      case 'custom':
+        if (_playerColliderPoly.length >= 3) {
+          final pts = <(double, double)>[(cx, cy)];
+          for (final p in _playerColliderPoly) {
+            if (p.length >= 2) pts.add((cx + p[0] * ts, cy + p[1] * ts));
+          }
+          return pts;
+        }
+        // fallback to circle
+        final r = _playerColliderR * ts;
+        return [(cx, cy), (cx - r, cy - r), (cx + r, cy - r),
+                (cx - r, cy + r), (cx + r, cy + r)];
+      default:
+        final r = _playerColliderR * ts;
+        return [(cx, cy), (cx - r, cy - r), (cx + r, cy - r),
+                (cx - r, cy + r), (cx + r, cy + r)];
+    }
+  }
+
+  /// Effective touch radius for an entity based on its collider shape.
+  double _entityTouchR(GameObject obj) {
+    final ts = mapData.tileSize.toDouble();
+    final shape = obj.properties['blockShape'] as String? ?? 'circle';
+    switch (shape) {
+      case 'rect':
+        final w = (obj.properties['blockW'] as num?)?.toDouble() ?? 0.38;
+        final h = (obj.properties['blockH'] as num?)?.toDouble() ?? 0.38;
+        return max(w, h) * ts;
+      case 'ellipse':
+        final rx = (obj.properties['blockRX'] as num?)?.toDouble() ?? 0.38;
+        final ry = (obj.properties['blockRY'] as num?)?.toDouble() ?? 0.38;
+        return max(rx, ry) * ts;
+      default:
+        return ((obj.properties['blockR'] as num?)?.toDouble() ?? 0.38) * ts;
+    }
+  }
+
+  double _playerTouchR() {
+    final ts = mapData.tileSize.toDouble();
+    switch (_playerColliderShape) {
+      case 'rect':    return max(_playerColliderW, _playerColliderH) * ts;
+      case 'ellipse': return max(_playerColliderRX, _playerColliderRY) * ts;
+      default:        return _playerColliderR * ts;
+    }
+  }
+
+  /// Returns true if the player collider at (cx, cy) overlaps a solid.
   bool _collidesAt(double cx, double cy) {
-    final r = mapData.tileSize * 0.38; // slightly smaller than half a tile
-    return _solidAt(cx - r, cy - r) ||
-        _solidAt(cx + r, cy - r) ||
-        _solidAt(cx - r, cy + r) ||
-        _solidAt(cx + r, cy + r);
+    final pts = _playerColliderPoints(cx, cy);
+    // Check tile solids with the corner points only (4 corners + center)
+    for (final (px, py) in pts.take(5)) {
+      if (_solidAt(px, py)) return true;
+    }
+    // Check props with all sample points
+    for (final (px, py) in pts) {
+      if (_propSolidAt(px, py)) return true;
+    }
+    return false;
+  }
+
+  /// Effective Y used for depth sorting. Uses sort polygon max-Y if defined,
+  /// else falls back to sortAnchorY offset from sprite centre.
+  /// Ray-casting point-in-polygon test using the object's sortPoints.
+  bool _pointInSortPolygon(double px, double py, GameObject obj,
+      double cx, double cy, double ts) {
+    final raw = obj.properties['sortPoints'];
+    if (raw is! List || raw.length < 3) return false;
+    // Build world-space vertices
+    final verts = <(double, double)>[];
+    for (final p in raw) {
+      if (p is List && p.length >= 2) {
+        verts.add((cx + (p[0] as num).toDouble() * ts,
+                   cy + (p[1] as num).toDouble() * ts));
+      }
+    }
+    if (verts.length < 3) return false;
+    bool inside = false;
+    int j = verts.length - 1;
+    for (int i = 0; i < verts.length; i++) {
+      final xi = verts[i].$1, yi = verts[i].$2;
+      final xj = verts[j].$1, yj = verts[j].$2;
+      if (((yi > py) != (yj > py)) &&
+          (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+        inside = !inside;
+      }
+      j = i;
+    }
+    return inside;
+  }
+
+  double _sortY(GameObject obj, double ts) {
+    final centerY = (obj.tileY + 0.5) * ts + obj.offsetY;
+    final rawPoints = obj.properties['sortPoints'];
+    if (rawPoints is List && rawPoints.isNotEmpty) {
+      double maxDy = double.negativeInfinity;
+      for (final p in rawPoints) {
+        if (p is List && p.length >= 2) {
+          final dy = (p[1] as num).toDouble();
+          if (dy > maxDy) maxDy = dy;
+        }
+      }
+      if (maxDy != double.negativeInfinity) return centerY + maxDy * ts;
+    }
+    return centerY + obj.sortAnchorY * ts;
   }
 
   /// Move the player by (dx, dy) with sliding collision against solid tiles.
@@ -661,6 +833,31 @@ class PlaySession {
     // Slide along Y
     if (!_collidesAt(_playerPos.x, ny)) {
       _playerPos.y = ny;
+      return;
+    }
+    // Escape sticking at irregular polygon corners — try angled slides
+    _trySlideEscape(dx, dy);
+  }
+
+  /// When fully blocked, try moving at ±20° and ±40° from intended direction
+  /// so the player slides along irregular polygon edges instead of sticking.
+  void _trySlideEscape(double dx, double dy) {
+    final len = sqrt(dx * dx + dy * dy);
+    if (len < 0.001) return;
+    final ux = dx / len, uy = dy / len;
+    final ts = mapData.tileSize.toDouble();
+    final maxX = mapData.width * ts;
+    final maxY = mapData.height * ts;
+    for (final deg in [-20.0, 20.0, -40.0, 40.0]) {
+      final rad = deg * pi / 180.0;
+      final ca = cos(rad), sa = sin(rad);
+      final tx = (_playerPos.x + len * (ux * ca - uy * sa)).clamp(0.0, maxX);
+      final ty = (_playerPos.y + len * (ux * sa + uy * ca)).clamp(0.0, maxY);
+      if (!_collidesAt(tx, ty)) {
+        _playerPos.x = tx;
+        _playerPos.y = ty;
+        return;
+      }
     }
   }
 
@@ -749,7 +946,8 @@ class PlaySession {
 
     for (final e in _enemies) {
       if (e.hidden) continue;
-      if ((e.pos - _playerPos).length < ts * 0.55) {
+      final touchDist = _playerTouchR() + _entityTouchR(e.source);
+      if ((e.pos - _playerPos).length < touchDist) {
         _fire(TriggerType.playerTouchesEnemy, triggerObj: e.source, cooldownKey: 'enemy_${e.source.id}');
       }
     }
@@ -840,7 +1038,7 @@ class PlaySession {
       proj.pos += proj.dir * step;
       proj.distTraveled += step;
 
-      if (_solidAt(proj.pos.x, proj.pos.y) || proj.distTraveled >= proj.rangePx) {
+      if (_solidAt(proj.pos.x, proj.pos.y) || _propSolidAt(proj.pos.x, proj.pos.y) || proj.distTraveled >= proj.rangePx) {
         toRemove.add(proj);
         continue;
       }
@@ -974,7 +1172,8 @@ class PlaySession {
       TriggerType.enemyNearPlayer =>
         _enemies.any((e) => !e.hidden && (e.pos - _playerPos).length < ts * 5),
       TriggerType.playerTouchesEnemy =>
-        _enemies.any((e) => !e.hidden && (e.pos - _playerPos).length < ts * 0.55),
+        _enemies.any((e) => !e.hidden &&
+            (e.pos - _playerPos).length < _playerTouchR() + _entityTouchR(e.source)),
       TriggerType.playerTouchesCollectible => mapData.objects.any((o) =>
         !_hiddenObjectIds.contains(o.id) &&
         (o.type == GameObjectType.coin || o.type == GameObjectType.chest) &&
@@ -1489,8 +1688,13 @@ class PlaySession {
       _drawWaterTile(canvas, obj, ts);
     }
 
+    // ── Build sorted render queue (z-order + y-sort) ──────────────────────
+    final queue = <({int zOrder, double worldY, void Function() draw})>[];
+
+    // Static objects (not player/enemy/water)
     for (final obj in mapData.objects) {
-      if (obj.type == GameObjectType.playerSpawn || obj.type == GameObjectType.enemy ||
+      if (obj.type == GameObjectType.playerSpawn ||
+          obj.type == GameObjectType.enemy ||
           obj.type == GameObjectType.waterBody) continue;
       if (_hiddenObjectIds.contains(obj.id)) continue;
       final alpha = _objectAlpha[obj.id] ?? 1.0;
@@ -1498,25 +1702,83 @@ class PlaySession {
           ? obj.floatAmplitude * sin(2 * pi * obj.floatSpeed * _elapsedSec)
           : 0.0;
       final (fxDx, fxDy) = _fxOffset(obj, ts);
-      _drawObject(
-          canvas,
-          Offset((obj.tileX + 0.5) * ts + fxDx, (obj.tileY + 0.5) * ts + floatY + fxDy),
-          ts, r, obj.type,
-          flipH: obj.flipH, flipV: obj.flipV,
-          scale: obj.scale, rotation: obj.rotation, alpha: alpha);
+      final cx = (obj.tileX + 0.5) * ts + obj.offsetX + fxDx;
+      final cy = (obj.tileY + 0.5) * ts + obj.offsetY + floatY + fxDy;
+      final sortY = _sortY(obj, ts);
+      queue.add((
+        zOrder: obj.zOrder,
+        worldY: sortY,
+        draw: () => _drawObject(canvas, Offset(cx, cy), ts, r, obj.type,
+            flipH: obj.flipH, flipV: obj.flipV,
+            scale: obj.scale, rotation: obj.rotation, alpha: alpha,
+            variantIndex: obj.variantIndex,
+            useAnimation: mapData.getVariantUseAnimation(obj.type, obj.variantIndex)),
+      ));
     }
 
+    // Enemies
     for (final e in _enemies) {
       if (e.hidden) continue;
       final floatY = e.source.floatEnabled
           ? e.source.floatAmplitude * sin(2 * pi * e.source.floatSpeed * _elapsedSec)
           : 0.0;
       final (fxDx, fxDy) = _fxOffset(e.source, ts);
-      _drawObject(canvas, Offset(e.pos.x + fxDx, e.pos.y + floatY + fxDy), ts, r, e.source.type,
-          flipH: e.source.flipH, flipV: e.source.flipV,
-          scale: e.source.scale, rotation: e.source.rotation, alpha: e.alpha);
+      final cx = e.pos.x + fxDx;
+      final cy = e.pos.y + floatY + fxDy;
+      queue.add((
+        zOrder: e.source.zOrder,
+        worldY: e.pos.y,
+        draw: () => _drawObject(canvas, Offset(cx, cy), ts, r, e.source.type,
+            flipH: e.source.flipH, flipV: e.source.flipV,
+            scale: e.source.scale, rotation: e.source.rotation, alpha: e.alpha,
+            variantIndex: e.source.variantIndex,
+            useAnimation: mapData.getVariantUseAnimation(e.source.type, e.source.variantIndex)),
+      ));
+    }
 
-      // HP bar (only when damaged)
+    // Player
+    if (!_playerHidden) {
+      final spawn = mapData.objects
+          .where((o) => o.type == GameObjectType.playerSpawn)
+          .firstOrNull;
+      final playerZOrder = spawn?.zOrder ?? 0;
+      final playerFloatY = (spawn != null && spawn.floatEnabled)
+          ? spawn.floatAmplitude * sin(2 * pi * spawn.floatSpeed * _elapsedSec)
+          : 0.0;
+      final playerDrawY = _playerPos.y + playerFloatY;
+      queue.add((
+        zOrder: playerZOrder,
+        worldY: _playerPos.y,
+        draw: () {
+          final playerSprite = _resolveSprite(GameObjectType.playerSpawn,
+              variantIndex: spawn?.variantIndex ?? 0,
+              useAnimation: mapData.getVariantUseAnimation(
+                  GameObjectType.playerSpawn, spawn?.variantIndex ?? 0));
+          if (playerSprite != null) {
+            _drawSprite(canvas, playerSprite, _playerPos.x, playerDrawY, ts,
+                flipH: _playerFlipH, flipV: _playerFlipV,
+                scale: _playerScale, rotation: _playerRotation, alpha: _playerAlpha);
+          } else {
+            _drawCircle(canvas, Offset(_playerPos.x, playerDrawY), r,
+                const Color(0xFF4ADE80), Icons.person, alpha: _playerAlpha);
+          }
+        },
+      ));
+    }
+
+    // Sort and execute
+    queue.sort((a, b) {
+      final zCmp = a.zOrder.compareTo(b.zOrder);
+      if (zCmp != 0) return zCmp;
+      return mapData.ySortEnabled ? a.worldY.compareTo(b.worldY) : 0;
+    });
+    for (final item in queue) {
+      item.draw();
+    }
+
+    // ── Overlays: HP bars (always above sprites) ───────────────────────────
+    for (final e in _enemies) {
+      if (e.hidden) continue;
       if (e.health < e.maxHealth && e.maxHealth > 0) {
         final barW = ts * 0.7;
         final barLeft = e.pos.x - barW / 2;
@@ -1526,24 +1788,6 @@ class PlaySession {
             Paint()..color = Colors.black54);
         canvas.drawRect(Rect.fromLTWH(barLeft, barTop, barW * pct, 3),
             Paint()..color = const Color(0xFFF87171));
-      }
-    }
-
-    // Player
-    if (!_playerHidden) {
-      final spawn = mapData.objects.where((o) => o.type == GameObjectType.playerSpawn).firstOrNull;
-      final playerFloatY = (spawn != null && spawn.floatEnabled)
-          ? spawn.floatAmplitude * sin(2 * pi * spawn.floatSpeed * _elapsedSec)
-          : 0.0;
-      final playerDrawY = _playerPos.y + playerFloatY;
-      final playerSprite = _resolveSprite(GameObjectType.playerSpawn);
-      if (playerSprite != null) {
-        _drawSprite(canvas, playerSprite, _playerPos.x, playerDrawY, ts,
-            flipH: _playerFlipH, flipV: _playerFlipV,
-            scale: _playerScale, rotation: _playerRotation, alpha: _playerAlpha);
-      } else {
-        _drawCircle(canvas, Offset(_playerPos.x, playerDrawY), r,
-            const Color(0xFF4ADE80), Icons.person, alpha: _playerAlpha);
       }
     }
 
@@ -1585,12 +1829,211 @@ class PlaySession {
 
     // Particles — always on top
     _particles.render(canvas);
+
+    // Debug collision overlay
+    if (debugCollision) _renderDebugCollision(canvas);
+  }
+
+  void _renderDebugCollision(Canvas canvas) {
+    final ts = mapData.tileSize.toDouble();
+
+    final tilePaint = Paint()
+      ..color = const Color(0xFF00E5FF).withOpacity(0.25)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    // Solid tiles
+    for (int ty = 0; ty < mapData.height; ty++) {
+      for (int tx = 0; tx < mapData.width; tx++) {
+        if (_solidAt(tx * ts + ts * 0.5, ty * ts + ts * 0.5)) {
+          canvas.drawRect(
+            Rect.fromLTWH(tx * ts, ty * ts, ts, ts),
+            tilePaint,
+          );
+        }
+      }
+    }
+
+    // Prop collision shapes
+    final propStroke = Paint()
+      ..color = const Color(0xFF00E5FF).withOpacity(0.8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    final propFill = Paint()
+      ..color = const Color(0xFF00E5FF).withOpacity(0.08)
+      ..style = PaintingStyle.fill;
+
+    for (final obj in mapData.objects) {
+      if (obj.type != GameObjectType.prop) continue;
+      if (_hiddenObjectIds.contains(obj.id)) continue;
+      if (!(obj.properties['solid'] as bool? ?? true)) continue;
+
+      final cx = (obj.tileX + 0.5) * ts + obj.offsetX;
+      final cy = (obj.tileY + 0.5) * ts + obj.offsetY;
+      final shape = obj.properties['blockShape'] as String? ?? 'rect';
+
+      switch (shape) {
+        case 'circle':
+          final r = ((obj.properties['blockR'] as num?)?.toDouble() ?? 0.5) * ts;
+          canvas.drawCircle(Offset(cx, cy), r, propFill);
+          canvas.drawCircle(Offset(cx, cy), r, propStroke);
+        case 'ellipse':
+          final rx = ((obj.properties['blockRX'] as num?)?.toDouble() ?? 0.5) * ts;
+          final ry = ((obj.properties['blockRY'] as num?)?.toDouble() ?? 0.5) * ts;
+          final rect = Rect.fromCenter(center: Offset(cx, cy), width: rx * 2, height: ry * 2);
+          canvas.drawOval(rect, propFill);
+          canvas.drawOval(rect, propStroke);
+        case 'custom':
+          final raw = obj.properties['sortPoints'];
+          if (raw is List && raw.length >= 3) {
+            final path = Path();
+            bool first = true;
+            for (final p in raw) {
+              if (p is! List || p.length < 2) continue;
+              final wx = cx + (p[0] as num).toDouble() * ts;
+              final wy = cy + (p[1] as num).toDouble() * ts;
+              if (first) { path.moveTo(wx, wy); first = false; }
+              else path.lineTo(wx, wy);
+            }
+            path.close();
+            canvas.drawPath(path, propFill);
+            canvas.drawPath(path, propStroke);
+          }
+        default: // rect
+          final hw = ((obj.properties['blockW'] as num?)?.toDouble() ?? 1.0) * ts * 0.5;
+          final hh = ((obj.properties['blockH'] as num?)?.toDouble() ?? 1.0) * ts * 0.5;
+          final rect = Rect.fromCenter(center: Offset(cx, cy), width: hw * 2, height: hh * 2);
+          canvas.drawRect(rect, propFill);
+          canvas.drawRect(rect, propStroke);
+      }
+    }
+
+    // Player collider
+    final playerStroke = Paint()
+      ..color = const Color(0xFF4ADE80).withOpacity(0.9)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    final playerFill = Paint()
+      ..color = const Color(0xFF4ADE80).withOpacity(0.12)
+      ..style = PaintingStyle.fill;
+    final px = _playerPos.x, py = _playerPos.y;
+    switch (_playerColliderShape) {
+      case 'rect':
+        final hw = _playerColliderW * ts;
+        final hh = _playerColliderH * ts;
+        final rect = Rect.fromCenter(center: Offset(px, py), width: hw * 2, height: hh * 2);
+        canvas.drawRect(rect, playerFill);
+        canvas.drawRect(rect, playerStroke);
+      case 'ellipse':
+        final rx = _playerColliderRX * ts;
+        final ry = _playerColliderRY * ts;
+        final rect = Rect.fromCenter(center: Offset(px, py), width: rx * 2, height: ry * 2);
+        canvas.drawOval(rect, playerFill);
+        canvas.drawOval(rect, playerStroke);
+      case 'custom':
+        if (_playerColliderPoly.length >= 3) {
+          final path = Path();
+          bool first = true;
+          for (final p in _playerColliderPoly) {
+            if (p.length < 2) continue;
+            final wx = px + p[0] * ts;
+            final wy = py + p[1] * ts;
+            if (first) { path.moveTo(wx, wy); first = false; }
+            else path.lineTo(wx, wy);
+          }
+          path.close();
+          canvas.drawPath(path, playerFill);
+          canvas.drawPath(path, playerStroke);
+        } else {
+          // No polygon defined yet — fallback circle
+          final r = _playerColliderR * ts;
+          canvas.drawCircle(Offset(px, py), r, playerFill);
+          canvas.drawCircle(Offset(px, py), r, playerStroke);
+        }
+      default: // circle
+        final r = _playerColliderR * ts;
+        canvas.drawCircle(Offset(px, py), r, playerFill);
+        canvas.drawCircle(Offset(px, py), r, playerStroke);
+    }
+
+    // Enemy + NPC colliders
+    final enemyStroke = Paint()
+      ..color = const Color(0xFFF87171).withOpacity(0.8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    final enemyFill = Paint()
+      ..color = const Color(0xFFF87171).withOpacity(0.08)
+      ..style = PaintingStyle.fill;
+    for (final e in _enemies) {
+      if (e.hidden) continue;
+      _drawEntityColliderDebug(canvas, e.source, e.pos.x, e.pos.y, ts, enemyStroke, enemyFill);
+    }
+
+    final npcStroke = Paint()
+      ..color = const Color(0xFF22C55E).withOpacity(0.8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    final npcFill = Paint()
+      ..color = const Color(0xFF22C55E).withOpacity(0.08)
+      ..style = PaintingStyle.fill;
+    for (final obj in mapData.objects) {
+      if (obj.type != GameObjectType.npc) continue;
+      if (_hiddenObjectIds.contains(obj.id)) continue;
+      final cx = (obj.tileX + 0.5) * ts + obj.offsetX;
+      final cy = (obj.tileY + 0.5) * ts + obj.offsetY;
+      _drawEntityColliderDebug(canvas, obj, cx, cy, ts, npcStroke, npcFill);
+    }
+  }
+
+  void _drawEntityColliderDebug(Canvas canvas, GameObject obj,
+      double cx, double cy, double ts, Paint stroke, Paint fill) {
+    final shape = obj.properties['blockShape'] as String? ?? 'circle';
+    switch (shape) {
+      case 'rect':
+        final hw = ((obj.properties['blockW'] as num?)?.toDouble() ?? 0.38) * ts;
+        final hh = ((obj.properties['blockH'] as num?)?.toDouble() ?? 0.38) * ts;
+        final rect = Rect.fromCenter(center: Offset(cx, cy), width: hw * 2, height: hh * 2);
+        canvas.drawRect(rect, fill);
+        canvas.drawRect(rect, stroke);
+      case 'ellipse':
+        final rx = ((obj.properties['blockRX'] as num?)?.toDouble() ?? 0.38) * ts;
+        final ry = ((obj.properties['blockRY'] as num?)?.toDouble() ?? 0.38) * ts;
+        final rect = Rect.fromCenter(center: Offset(cx, cy), width: rx * 2, height: ry * 2);
+        canvas.drawOval(rect, fill);
+        canvas.drawOval(rect, stroke);
+      case 'custom':
+        final raw = obj.properties['sortPoints'];
+        if (raw is List && raw.length >= 3) {
+          final path = Path();
+          bool first = true;
+          for (final p in raw) {
+            if (p is! List || p.length < 2) continue;
+            final wx = cx + (p[0] as num).toDouble() * ts;
+            final wy = cy + (p[1] as num).toDouble() * ts;
+            if (first) { path.moveTo(wx, wy); first = false; }
+            else path.lineTo(wx, wy);
+          }
+          path.close();
+          canvas.drawPath(path, fill);
+          canvas.drawPath(path, stroke);
+          break;
+        }
+        // fallback to circle
+        final r = ((obj.properties['blockR'] as num?)?.toDouble() ?? 0.38) * ts;
+        canvas.drawCircle(Offset(cx, cy), r, fill);
+        canvas.drawCircle(Offset(cx, cy), r, stroke);
+      default: // circle
+        final r = ((obj.properties['blockR'] as num?)?.toDouble() ?? 0.38) * ts;
+        canvas.drawCircle(Offset(cx, cy), r, fill);
+        canvas.drawCircle(Offset(cx, cy), r, stroke);
+    }
   }
 
   void _drawObject(Canvas canvas, Offset center, double ts, double r, GameObjectType type,
       {bool flipH = false, bool flipV = false,
-      double scale = 1.0, double rotation = 0.0, double alpha = 1.0}) {
-    final sprite = _resolveSprite(type);
+      double scale = 1.0, double rotation = 0.0, double alpha = 1.0,
+      int variantIndex = 0, bool useAnimation = false}) {
+    final sprite = _resolveSprite(type, variantIndex: variantIndex, useAnimation: useAnimation);
     if (sprite != null) {
       _drawSprite(canvas, sprite, center.dx, center.dy, ts,
           flipH: flipH, flipV: flipV, scale: scale, rotation: rotation, alpha: alpha);
@@ -1599,20 +2042,30 @@ class PlaySession {
     }
   }
 
-  ui.Image? _resolveSprite(GameObjectType type) {
-    if (spriteCache.isAnimated(type)) {
-      final animName = spriteCache.defaultAnim(type);
+  ui.Image? _resolveSprite(GameObjectType type, {int variantIndex = 0, bool useAnimation = false}) {
+    // Animated frame
+    if (useAnimation && spriteCache.isAnimated(type, variantIndex)) {
+      final animName = spriteCache.defaultAnim(type, variantIndex);
       if (animName.isNotEmpty) {
-        final fps = spriteCache.getAnimFps(type, animName);
-        final frameCount = spriteCache.animFrameCount(type, animName);
+        final fps = spriteCache.getAnimFps(type, variantIndex, animName);
+        final frameCount = spriteCache.animFrameCount(type, variantIndex, animName);
         if (frameCount > 0) {
           final frameIndex = (_elapsedSec * fps).floor() % frameCount;
-          return spriteCache.getAnimFrame(type, animName, frameIndex);
+          return spriteCache.getAnimFrame(type, variantIndex, animName, frameIndex);
         }
       }
-      return null;
     }
-    return spriteCache.getImage(type);
+    // Static sprite
+    final staticImg = spriteCache.getVariantImage(type, variantIndex);
+    if (staticImg != null) return staticImg;
+    // Fall back to frame 0 if animation exists but no static sprite imported
+    if (spriteCache.isAnimated(type, variantIndex)) {
+      final animName = spriteCache.defaultAnim(type, variantIndex);
+      if (animName.isNotEmpty) {
+        return spriteCache.getAnimFrame(type, variantIndex, animName, 0);
+      }
+    }
+    return null;
   }
 
   void _drawSprite(Canvas canvas, ui.Image image, double cx, double cy, double ts,
@@ -1622,10 +2075,12 @@ class PlaySession {
     canvas.save();
     canvas.translate(cx, cy);
     if (rotation != 0.0) canvas.rotate(rotation * pi / 180.0);
-    canvas.scale(flipH ? -scale : scale, flipV ? -scale : scale);
+    canvas.scale(flipH ? -1.0 : 1.0, flipV ? -1.0 : 1.0);
+    final drawW = image.width.toDouble() * scale;
+    final drawH = image.height.toDouble() * scale;
     canvas.drawImageRect(
       image, src,
-      Rect.fromCenter(center: Offset.zero, width: ts, height: ts),
+      Rect.fromCenter(center: Offset.zero, width: drawW, height: drawH),
       Paint()..color = Color.fromARGB((alpha * 255).round().clamp(0, 255), 255, 255, 255),
     );
     canvas.restore();

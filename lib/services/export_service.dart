@@ -49,13 +49,23 @@ class ExportService {
       final spritesDir = Directory('$gameDataDir/sprites');
       await spritesDir.create(recursive: true);
 
-      final objMap = <String, String>{};
-      for (final e in state.spriteCache.paths.entries) {
-        final ext = e.value.split('.').last;
-        final rel = 'sprites/obj_${e.key}.$ext';
-        await File(e.value).copy('$gameDataDir/$rel');
-        objMap[e.key] = rel;
+      // Export object variant sprites
+      final objVariantsMap = <String, List<String>>{};
+      for (final e in state.spriteCache.objVariantPathsMap.entries) {
+        final list = <String>[];
+        for (int i = 0; i < e.value.length; i++) {
+          final p = e.value[i];
+          final ext = p.replaceAll('\\', '/').split('.').last;
+          final rel = 'sprites/obj_${e.key}_$i.$ext';
+          await File(p).copy('$gameDataDir/$rel');
+          list.add(rel);
+        }
+        if (list.isNotEmpty) objVariantsMap[e.key] = list;
       }
+      // Backward-compat single-sprite map (variant 0)
+      final objMap = <String, String>{
+        for (final e in objVariantsMap.entries) e.key: e.value[0]
+      };
       final tileMap = <String, List<String>>{};
       for (final e in state.spriteCache.tilePaths.entries) {
         final list = <String>[];
@@ -72,6 +82,7 @@ class ExportService {
       final animFpsMap = <String, Map<String, int>>{};
       final animDefaultsMap = <String, String>{};
       for (final te in state.spriteCache.animPaths.entries) {
+        final safeKey = te.key.replaceAll(':', '_');
         final typePaths = <String, List<String>>{};
         final typeFps = <String, int>{};
         for (final ae in te.value.entries) {
@@ -79,7 +90,7 @@ class ExportService {
           for (int i = 0; i < ae.value.length; i++) {
             final p = ae.value[i];
             final ext = p.split('.').last;
-            final rel = 'sprites/anim_${te.key}_${ae.key}_$i.$ext';
+            final rel = 'sprites/anim_${safeKey}_${ae.key}_$i.$ext';
             await File(p).copy('$gameDataDir/$rel');
             list.add(rel);
           }
@@ -98,12 +109,13 @@ class ExportService {
       }
       final animSheetsMap = <String, Map<String, Map<String, dynamic>>>{};
       for (final te in state.spriteCache.animSheets.entries) {
+        final safeKey = te.key.replaceAll(':', '_');
         final typeSheets = <String, Map<String, dynamic>>{};
         for (final ae in te.value.entries) {
           final def = ae.value;
           final src = def['path'] as String;
           final ext = src.replaceAll('\\', '/').split('.').last;
-          final rel = 'sprites/anim_${te.key}_${ae.key}_sheet.$ext';
+          final rel = 'sprites/anim_${safeKey}_${ae.key}_sheet.$ext';
           await File(src).copy('$gameDataDir/$rel');
           typeSheets[ae.key] = {
             'path': rel,
@@ -146,6 +158,7 @@ class ExportService {
           Map<String, Map<String, dynamic>>.from(state.mapCache);
       allMaps[state.currentMapId] = state.mapData.toJson()
         ..['spritePaths'] = objMap
+        ..['objectVariantPaths'] = objVariantsMap
         ..['tileSpritesPaths'] = tileMap
         ..['animPaths'] = animMap
         ..['animFps'] = animFpsMap
@@ -172,6 +185,7 @@ class ExportService {
         final mapJson =
             Map<String, dynamic>.from(allMaps[pm.id] ?? {});
         if (mapJson['spritePaths'] == null) mapJson['spritePaths'] = objMap;
+        if (mapJson['objectVariantPaths'] == null) mapJson['objectVariantPaths'] = objVariantsMap;
         if (mapJson['tileSpritesPaths'] == null) {
           mapJson['tileSpritesPaths'] = tileMap;
         }
@@ -331,14 +345,22 @@ with zipfile.ZipFile(base_apk, 'r') as src:
       EditorState state) async {
     final data = <String, List<int>>{};
 
-    // Sprites
-    final objMap = <String, String>{};
-    for (final e in state.spriteCache.paths.entries) {
-      final ext = e.value.split('.').last;
-      final rel = 'sprites/obj_${e.key}.$ext';
-      data[rel] = await File(e.value).readAsBytes();
-      objMap[e.key] = rel;
+    // Sprites — export all variants
+    final objVariantsMap = <String, List<String>>{};
+    for (final e in state.spriteCache.objVariantPathsMap.entries) {
+      final list = <String>[];
+      for (int i = 0; i < e.value.length; i++) {
+        final p = e.value[i];
+        final ext = p.replaceAll('\\', '/').split('.').last;
+        final rel = 'sprites/obj_${e.key}_$i.$ext';
+        data[rel] = await File(p).readAsBytes();
+        list.add(rel);
+      }
+      if (list.isNotEmpty) objVariantsMap[e.key] = list;
     }
+    final objMap = <String, String>{
+      for (final e in objVariantsMap.entries) e.key: e.value[0]
+    };
     final tileMap = <String, List<String>>{};
     for (final e in state.spriteCache.tilePaths.entries) {
       final list = <String>[];
@@ -355,6 +377,7 @@ with zipfile.ZipFile(base_apk, 'r') as src:
     final animFpsMap = <String, Map<String, int>>{};
     final animDefaultsMap = <String, String>{};
     for (final te in state.spriteCache.animPaths.entries) {
+      final safeKey = te.key.replaceAll(':', '_');
       final typePaths = <String, List<String>>{};
       final typeFps = <String, int>{};
       for (final ae in te.value.entries) {
@@ -362,7 +385,7 @@ with zipfile.ZipFile(base_apk, 'r') as src:
         for (int i = 0; i < ae.value.length; i++) {
           final p = ae.value[i];
           final ext = p.split('.').last;
-          final rel = 'sprites/anim_${te.key}_${ae.key}_$i.$ext';
+          final rel = 'sprites/anim_${safeKey}_${ae.key}_$i.$ext';
           data[rel] = await File(p).readAsBytes();
           list.add(rel);
         }
@@ -381,12 +404,13 @@ with zipfile.ZipFile(base_apk, 'r') as src:
     }
     final animSheetsMap = <String, Map<String, Map<String, dynamic>>>{};
     for (final te in state.spriteCache.animSheets.entries) {
+      final safeKey = te.key.replaceAll(':', '_');
       final typeSheets = <String, Map<String, dynamic>>{};
       for (final ae in te.value.entries) {
         final def = ae.value;
         final src = def['path'] as String;
         final ext = src.replaceAll('\\', '/').split('.').last;
-        final rel = 'sprites/anim_${te.key}_${ae.key}_sheet.$ext';
+        final rel = 'sprites/anim_${safeKey}_${ae.key}_sheet.$ext';
         data[rel] = await File(src).readAsBytes();
         typeSheets[ae.key] = {
           'path': rel,
@@ -423,6 +447,7 @@ with zipfile.ZipFile(base_apk, 'r') as src:
         Map<String, Map<String, dynamic>>.from(state.mapCache);
     allMaps[state.currentMapId] = state.mapData.toJson()
       ..['spritePaths'] = objMap
+      ..['objectVariantPaths'] = objVariantsMap
       ..['tileSpritesPaths'] = tileMap
       ..['animPaths'] = animMap
       ..['animFps'] = animFpsMap

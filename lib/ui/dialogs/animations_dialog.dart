@@ -10,12 +10,14 @@ import '../../theme/app_theme.dart';
 
 class AnimationsDialog extends StatefulWidget {
   final GameObjectType type;
+  final int variantIndex;
   final SpriteCache spriteCache;
   final MapData mapData;
   final VoidCallback onChanged;
 
   const AnimationsDialog._({
     required this.type,
+    required this.variantIndex,
     required this.spriteCache,
     required this.mapData,
     required this.onChanged,
@@ -24,6 +26,7 @@ class AnimationsDialog extends StatefulWidget {
   static Future<void> show(
     BuildContext context, {
     required GameObjectType type,
+    int variantIndex = 0,
     required SpriteCache spriteCache,
     required MapData mapData,
     required VoidCallback onChanged,
@@ -33,6 +36,7 @@ class AnimationsDialog extends StatefulWidget {
       barrierColor: Colors.black54,
       builder: (_) => AnimationsDialog._(
         type: type,
+        variantIndex: variantIndex,
         spriteCache: spriteCache,
         mapData: mapData,
         onChanged: onChanged,
@@ -52,14 +56,17 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
 
   SpriteCache get _cache => widget.spriteCache;
   GameObjectType get _type => widget.type;
+  int get _vi => widget.variantIndex;
+  /// Composite key for mapData anim maps: 'type:vi'
+  String get _animKey => '${_type.name}:$_vi';
   MapData get _mapData => widget.mapData;
 
   @override
   void initState() {
     super.initState();
-    final names = _cache.animNames(_type);
+    final names = _cache.animNames(_type, _vi);
     for (final name in names) {
-      _isSheetMode[name] = _cache.isSheetAnim(_type, name);
+      _isSheetMode[name] = _cache.isSheetAnim(_type, _vi, name);
     }
     _selectedAnim = names.isNotEmpty ? names.first : null;
   }
@@ -69,39 +76,39 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
   Future<void> _addAnimation() async {
     final name = await _promptName(context, title: 'New Animation', hint: 'e.g. walk_right');
     if (name == null || name.isEmpty) return;
-    _cache.addAnimation(_type, name);
-    _mapData.animPaths.putIfAbsent(_type.name, () => {})[name] = [];
-    _mapData.animFps.putIfAbsent(_type.name, () => {})[name] = 8;
+    _cache.addAnimation(_type, _vi, name);
+    _mapData.animPaths.putIfAbsent(_animKey, () => {})[name] = [];
+    _mapData.animFps.putIfAbsent(_animKey, () => {})[name] = 8;
     _isSheetMode[name] = false;
     setState(() => _selectedAnim = name);
     widget.onChanged();
   }
 
   void _removeAnimation(String name) {
-    _cache.removeAnimation(_type, name);
-    _mapData.animPaths[_type.name]?.remove(name);
-    _mapData.animFps[_type.name]?.remove(name);
-    _mapData.animSheets[_type.name]?.remove(name);
-    if (_mapData.animPaths[_type.name]?.isEmpty == true) {
-      _mapData.animPaths.remove(_type.name);
+    _cache.removeAnimation(_type, _vi, name);
+    _mapData.animPaths[_animKey]?.remove(name);
+    _mapData.animFps[_animKey]?.remove(name);
+    _mapData.animSheets[_animKey]?.remove(name);
+    if (_mapData.animPaths[_animKey]?.isEmpty == true) {
+      _mapData.animPaths.remove(_animKey);
     }
-    if (_mapData.animFps[_type.name]?.isEmpty == true) {
-      _mapData.animFps.remove(_type.name);
+    if (_mapData.animFps[_animKey]?.isEmpty == true) {
+      _mapData.animFps.remove(_animKey);
     }
-    if (_mapData.animSheets[_type.name]?.isEmpty == true) {
-      _mapData.animSheets.remove(_type.name);
+    if (_mapData.animSheets[_animKey]?.isEmpty == true) {
+      _mapData.animSheets.remove(_animKey);
     }
-    if (_mapData.animDefaults[_type.name] == name) {
-      _mapData.animDefaults.remove(_type.name);
+    if (_mapData.animDefaults[_animKey] == name) {
+      _mapData.animDefaults.remove(_animKey);
     }
-    final names = _cache.animNames(_type);
+    final names = _cache.animNames(_type, _vi);
     setState(() => _selectedAnim = names.isNotEmpty ? names.first : null);
     widget.onChanged();
   }
 
   void _setDefault(String name) {
-    _cache.setDefaultAnim(_type, name);
-    _mapData.animDefaults[_type.name] = name;
+    _cache.setDefaultAnim(_type, _vi, name);
+    _mapData.animDefaults[_animKey] = name;
     setState(() {});
     widget.onChanged();
   }
@@ -115,24 +122,24 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
     if (result == null) return;
     for (final f in result.files) {
       if (f.path == null) continue;
-      await _cache.addAnimFrame(_type, animName, f.path!);
-      _mapData.animPaths.putIfAbsent(_type.name, () => {}).putIfAbsent(animName, () => []).add(f.path!);
+      await _cache.addAnimFrame(_type, _vi, animName, f.path!);
+      _mapData.animPaths.putIfAbsent(_animKey, () => {}).putIfAbsent(animName, () => []).add(f.path!);
     }
     setState(() {});
     widget.onChanged();
   }
 
   void _removeFrame(String animName, int index) {
-    _cache.removeAnimFrame(_type, animName, index);
-    final paths = _mapData.animPaths[_type.name]?[animName];
+    _cache.removeAnimFrame(_type, _vi, animName, index);
+    final paths = _mapData.animPaths[_animKey]?[animName];
     if (paths != null && index < paths.length) paths.removeAt(index);
     setState(() {});
     widget.onChanged();
   }
 
   void _setFps(String animName, int fps) {
-    _cache.setAnimFps(_type, animName, fps);
-    _mapData.animFps.putIfAbsent(_type.name, () => {})[animName] = fps;
+    _cache.setAnimFps(_type, _vi, animName, fps);
+    _mapData.animFps.putIfAbsent(_animKey, () => {})[animName] = fps;
     widget.onChanged();
   }
 
@@ -140,8 +147,8 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final names = _cache.animNames(_type);
-    final defaultName = _cache.defaultAnim(_type);
+    final names = _cache.animNames(_type, _vi);
+    final defaultName = _cache.defaultAnim(_type, _vi);
 
     return Dialog(
       backgroundColor: AppColors.dialogBg,
@@ -208,7 +215,7 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
             ),
             const SizedBox(width: 10),
             Text(
-              'Animations: ${_type.label}',
+              'Animations: ${_type.label} — Variant ${_vi + 1}',
               style: const TextStyle(
                 color: AppColors.textPrimary,
                 fontSize: 15,
@@ -250,7 +257,7 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
                     children: names.map((name) {
                       final isSelected = name == _selectedAnim;
                       final isDefault = name == defaultName;
-                      final isSheet = _isSheetMode[name] ?? _cache.isSheetAnim(_type, name);
+                      final isSheet = _isSheetMode[name] ?? _cache.isSheetAnim(_type, _vi, name);
                       return GestureDetector(
                         onTap: () => setState(() => _selectedAnim = name),
                         child: Container(
@@ -345,8 +352,8 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
       );
 
   Widget _buildFrameEditor(String animName, String defaultName) {
-    final isSheet = _isSheetMode[animName] ?? _cache.isSheetAnim(_type, animName);
-    final fps = _cache.getAnimFps(_type, animName);
+    final isSheet = _isSheetMode[animName] ?? _cache.isSheetAnim(_type, _vi, animName);
+    final fps = _cache.getAnimFps(_type, _vi, animName);
     final isDefault = animName == defaultName;
 
     return Column(
@@ -447,8 +454,9 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
         Expanded(
           child: isSheet
               ? _SpritesheetEditor(
-                  key: ValueKey('sheet_$animName'),
+                  key: ValueKey('sheet_${_vi}_$animName'),
                   type: _type,
+                  variantIndex: _vi,
                   animName: animName,
                   cache: _cache,
                   mapData: _mapData,
@@ -466,7 +474,7 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
   Future<void> _toggleSource(String animName, bool toSheet) async {
     if (toSheet) {
       // Confirm if existing frames will be lost
-      final count = _cache.animFrameCount(_type, animName);
+      final count = _cache.animFrameCount(_type, _vi, animName);
       if (count > 0) {
         final ok = await _confirmDialog(
           context,
@@ -475,18 +483,18 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
         );
         if (ok != true) return;
         // User confirmed — clear existing frame data now
-        _cache.clearSheetAnim(_type, animName);
-        _mapData.animPaths[_type.name]?.remove(animName);
+        _cache.clearSheetAnim(_type, _vi, animName);
+        _mapData.animPaths[_animKey]?.remove(animName);
         widget.onChanged();
       }
       // Mark as sheet mode locally — no def stored until user clicks Apply
       setState(() => _isSheetMode[animName] = true);
     } else {
       // Switch back to frames mode
-      _cache.clearSheetAnim(_type, animName);
-      _mapData.animSheets[_type.name]?.remove(animName);
-      if (_mapData.animSheets[_type.name]?.isEmpty == true) {
-        _mapData.animSheets.remove(_type.name);
+      _cache.clearSheetAnim(_type, _vi, animName);
+      _mapData.animSheets[_animKey]?.remove(animName);
+      if (_mapData.animSheets[_animKey]?.isEmpty == true) {
+        _mapData.animSheets.remove(_animKey);
       }
       setState(() => _isSheetMode[animName] = false);
       widget.onChanged();
@@ -494,7 +502,7 @@ class _AnimationsDialogState extends State<AnimationsDialog> {
   }
 
   Widget _buildFramesContent(String animName) {
-    final framePaths = _cache.getAnimPaths(_type, animName);
+    final framePaths = _cache.getAnimPaths(_type, _vi, animName);
 
     return Column(
       children: [
@@ -807,6 +815,7 @@ class _SourceToggle extends StatelessWidget {
 
 class _SpritesheetEditor extends StatefulWidget {
   final GameObjectType type;
+  final int variantIndex;
   final String animName;
   final SpriteCache cache;
   final MapData mapData;
@@ -815,6 +824,7 @@ class _SpritesheetEditor extends StatefulWidget {
   const _SpritesheetEditor({
     super.key,
     required this.type,
+    required this.variantIndex,
     required this.animName,
     required this.cache,
     required this.mapData,
@@ -837,7 +847,7 @@ class _SpritesheetEditorState extends State<_SpritesheetEditor> {
   void initState() {
     super.initState();
     // Pre-populate from existing def
-    final def = widget.cache.getSheetDef(widget.type, widget.animName);
+    final def = widget.cache.getSheetDef(widget.type, widget.variantIndex, widget.animName);
     if (def != null) {
       _sheetPath = def.path;
       _fwCtrl.text = '${def.frameWidth}';
@@ -898,12 +908,13 @@ class _SpritesheetEditorState extends State<_SpritesheetEditor> {
     setState(() => _applying = true);
     final def = AnimSheetDef(
         path: path, frameWidth: fw, frameHeight: fh, frameCount: fc);
-    await widget.cache.setSheetAnim(widget.type, widget.animName, def);
+    final animKey = '${widget.type.name}:${widget.variantIndex}';
+    await widget.cache.setSheetAnim(widget.type, widget.variantIndex, widget.animName, def);
 
     // Persist to mapData
     widget.mapData.animSheets
-        .putIfAbsent(widget.type.name, () => {})[widget.animName] = def.toJson();
-    widget.mapData.animPaths[widget.type.name]?.remove(widget.animName);
+        .putIfAbsent(animKey, () => {})[widget.animName] = def.toJson();
+    widget.mapData.animPaths[animKey]?.remove(widget.animName);
 
     setState(() => _applying = false);
     widget.onChanged();
