@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 import '../models/game_object.dart';
-import '../models/map_data.dart';
+import '../models/tileset_def.dart';
 
 // ─── Spritesheet definition ────────────────────────────────────────────────
 
@@ -146,59 +146,6 @@ class SpriteCache {
     _objVariantImages[type]?.forEach((img) => img.dispose());
     _objVariantImages.remove(type);
     _objVariantPaths.remove(type);
-  }
-
-  // ─── Tile sprites (multiple variants per TileType) ────────────────────────
-  final Map<TileType, List<ui.Image>> _tileImages = {};
-  final Map<TileType, List<String>> _tilePaths = {};
-
-  List<ui.Image> getTileImages(TileType type) => _tileImages[type] ?? [];
-  List<String> getTilePaths(TileType type) => _tilePaths[type] ?? [];
-
-  ui.Image? getTileImage(TileType type, int variant) {
-    final list = _tileImages[type];
-    if (list == null || list.isEmpty) return null;
-    return list[variant.clamp(0, list.length - 1)];
-  }
-
-  int tileVariantCount(TileType type) => _tileImages[type]?.length ?? 0;
-
-  Future<int?> addTileSprite(TileType type, String path) async {
-    try {
-      final img = await _loadImage(path);
-      _tileImages.putIfAbsent(type, () => []).add(img);
-      _tilePaths.putIfAbsent(type, () => []).add(path);
-      return _tileImages[type]!.length - 1;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  void removeTileSprite(TileType type, int index) {
-    final imgs = _tileImages[type];
-    final paths = _tilePaths[type];
-    if (imgs == null || index >= imgs.length) return;
-    imgs[index].dispose();
-    imgs.removeAt(index);
-    paths?.removeAt(index);
-    if (imgs.isEmpty) {
-      _tileImages.remove(type);
-      _tilePaths.remove(type);
-    }
-  }
-
-  Map<String, List<String>> get tilePaths =>
-      {for (final e in _tilePaths.entries) e.key.name: List.from(e.value)};
-
-  Future<void> loadTileFromPaths(Map<String, List<String>> saved) async {
-    for (final e in saved.entries) {
-      try {
-        final type = TileType.values.firstWhere((t) => t.name == e.key);
-        for (final path in e.value) {
-          await addTileSprite(type, path);
-        }
-      } catch (_) {}
-    }
   }
 
   // ─── Named animations per GameObjectType+variant ─────────────────────────
@@ -514,17 +461,39 @@ class SpriteCache {
     return frame.image;
   }
 
+  // ─── Tileset images ─────────────────────────────────────────────────────────
+
+  final Map<String, ui.Image> _tilesetImages = {}; // tilesetId → full image
+
+  ui.Image? getTilesetImage(String tilesetId) => _tilesetImages[tilesetId];
+
+  Future<void> loadTileset(TilesetDef def) async {
+    if (_tilesetImages.containsKey(def.id)) return; // already loaded
+    if (!File(def.imagePath).existsSync()) return;
+    final img = await _loadImage(def.imagePath);
+    _tilesetImages[def.id]?.dispose();
+    _tilesetImages[def.id] = img;
+  }
+
+  Future<void> loadTilesets(List<TilesetDef> defs) async {
+    for (final def in defs) {
+      await loadTileset(def);
+    }
+  }
+
+  void clearTilesets() {
+    for (final img in _tilesetImages.values) img.dispose();
+    _tilesetImages.clear();
+  }
+
+  // ─── Clear / Dispose ─────────────────────────────────────────────────────────
+
   void clear() {
     for (final list in _objVariantImages.values) {
       for (final img in list) img.dispose();
     }
     _objVariantImages.clear();
     _objVariantPaths.clear();
-    for (final list in _tileImages.values) {
-      for (final img in list) img.dispose();
-    }
-    _tileImages.clear();
-    _tilePaths.clear();
     for (final animMap in _animImages.values) {
       for (final imgs in animMap.values) {
         for (final img in imgs) img.dispose();
@@ -535,6 +504,7 @@ class SpriteCache {
     _animSheetDefs.clear();
     _animFps.clear();
     _defaultAnim.clear();
+    clearTilesets();
     // (maps are now String-keyed, no extra cleanup needed)
   }
 

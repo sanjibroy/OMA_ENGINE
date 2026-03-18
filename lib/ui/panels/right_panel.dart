@@ -5,7 +5,6 @@ import '../../editor/editor_state.dart';
 import '../../models/game_object.dart';
 import '../../models/game_effect.dart';
 import '../../models/game_project.dart';
-import '../../models/map_data.dart';
 import '../../models/game_rule.dart';
 import '../../models/item_def.dart';
 import '../../theme/app_theme.dart';
@@ -2180,6 +2179,19 @@ class _ObjectPropsFormState extends State<_ObjectPropsForm> {
       );
 }
 
+// ─── Paint color palette ──────────────────────────────────────────────────────
+
+const _kPaletteColors = [
+  // Neutral
+  0xFF0D0D0D, 0xFF1A1A1A, 0xFF2C2C2C, 0xFF4A4A4A, 0xFF808080, 0xFFBFBFBF,
+  // Nature
+  0xFF1A4A1A, 0xFF3A7D44, 0xFF6BBF6B, 0xFFB5934A, 0xFF7C4D1E, 0xFF5C3A1E,
+  // Water/Sky
+  0xFF0D2040, 0xFF1D6FA4, 0xFF4A9FD4, 0xFF6A3A7D, 0xFF9B5FC0, 0xFFFFE0B2,
+  // Stone/Misc
+  0xFF52525B, 0xFF6B7280, 0xFF9CA3AF, 0xFFCC6622, 0xFFAA3333, 0xFFFFFFFF,
+];
+
 // ─── Tile Info Section ────────────────────────────────────────────────────────
 
 class _TileInfoSection extends StatelessWidget {
@@ -2192,45 +2204,62 @@ class _TileInfoSection extends StatelessWidget {
     final es = editorState;
     final map = es.mapData;
 
-    return ValueListenableBuilder<TileType>(
-      valueListenable: es.selectedTile,
-      builder: (_, selTile, __) {
-        return ValueListenableBuilder<int>(
-          valueListenable: es.selectedTileVariant,
-          builder: (_, selVariant, __) {
-            final rows = <Widget>[
-              _label('SELECTED TILE'),
-              const SizedBox(height: 8),
-              _row('Type', selTile.label),
-              if (selVariant > 0) _row('Variant', '$selVariant'),
-            ];
+    return ValueListenableBuilder<Color>(
+      valueListenable: es.selectedPaintColor,
+      builder: (_, selColor, __) {
+        final rows = <Widget>[
+          _label('PAINT COLOR'),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: _kPaletteColors.map((argb) {
+              final c = Color(argb);
+              final isSelected = selColor.value == argb;
+              return GestureDetector(
+                onTap: () {
+                  es.selectedPaintColor.value = c;
+                  es.selectedBrush.value = null; // deselect tileset brush
+                },
+                child: Container(
+                  width: 34,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: c,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: isSelected ? Colors.white : const Color(0xFF2A2A2A),
+                      width: isSelected ? 2.5 : 1,
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ];
 
-            if (hover != null) {
-              final (tx, ty) = hover!;
-              final hType = map.getTile(tx, ty);
-              final hVariant = map.getTileVariant(tx, ty);
-              final hColl = map.getTileCollision(tx, ty);
-              final collLabel = switch (hColl) {
-                1 => 'Force passable',
-                2 => 'Force solid',
-                _ => 'Default',
-              };
-              rows.addAll([
-                const SizedBox(height: 14),
-                _label('HOVERED TILE'),
-                const SizedBox(height: 8),
-                _row('Position', '($tx, $ty)'),
-                _row('Type', hType.label),
-                if (hVariant > 0) _row('Variant', '$hVariant'),
-                _row('Collision', collLabel),
-              ]);
-            }
+        if (hover != null) {
+          final (tx, ty) = hover!;
+          final hColor = map.getTileColor(tx, ty);
+          final hColl = map.getTileCollision(tx, ty);
+          final collLabel = switch (hColl) {
+            1 => 'Force passable',
+            2 => 'Force solid',
+            _ => 'Default',
+          };
+          rows.addAll([
+            const SizedBox(height: 14),
+            _label('HOVERED TILE'),
+            const SizedBox(height: 8),
+            _row('Position', '($tx, $ty)'),
+            _row('Color', hColor == 0 ? 'Empty' : '#${hColor.toRadixString(16).padLeft(8, '0').toUpperCase()}'),
+            _row('Collision', collLabel),
+          ]);
+        }
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: rows,
-            );
-          },
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: rows,
         );
       },
     );

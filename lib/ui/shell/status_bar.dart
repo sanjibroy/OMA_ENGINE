@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../editor/editor_state.dart';
-import '../../models/map_data.dart';
 import '../../theme/app_theme.dart';
 
 class StatusBar extends StatelessWidget {
@@ -35,12 +34,21 @@ class StatusBar extends StatelessWidget {
           ),
           _sep(),
           ValueListenableBuilder(
-            valueListenable: editorState.selectedTile,
-            builder: (_, tile, __) => _statusItem(
-              Icons.brush,
-              'Brush: ${tile.label}',
-              color: tile.color,
-            ),
+            valueListenable: editorState.selectedBrush,
+            builder: (_, brush, __) {
+              if (brush != null) {
+                final def = editorState.mapData.tilesets
+                    .where((t) => t.id == brush.tilesetId)
+                    .firstOrNull;
+                final name = def?.name ?? 'Tileset';
+                final size = brush.width == 1 && brush.height == 1
+                    ? '[${brush.col1},${brush.row1}]'
+                    : '${brush.width}×${brush.height} [${brush.col1},${brush.row1}]';
+                return _statusItem(Icons.brush, 'Brush: $name $size',
+                    color: AppColors.accent);
+              }
+              return _statusItem(Icons.brush, 'Brush: None');
+            },
           ),
           const Spacer(),
           _statusItem(Icons.circle, 'Ready', color: AppColors.success),

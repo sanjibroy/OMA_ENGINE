@@ -1,4 +1,4 @@
-import 'dart:math' show max;
+import 'dart:math' show max, min;
 import 'dart:ui' as ui;
 import '../models/game_effect.dart';
 import '../models/item_def.dart';
@@ -9,11 +9,30 @@ import 'package:flame/game.dart';
 import 'package:flutter/material.dart' hide Viewport;
 import '../models/game_object.dart';
 import '../models/map_data.dart';
+import '../models/tileset_def.dart';
 import '../services/sprite_cache.dart';
 import 'components/grid_component.dart';
 import 'components/objects_component.dart';
 import 'editor_state.dart';
 import 'play_session.dart';
+
+/// Snapshot of tile data copied from a rectangular map region (single layer).
+class TileRegionData {
+  final int width, height;
+  final List<List<int>> tileColors;
+  final List<List<TileCell?>> layerCells; // cells from the active layer
+  final List<List<int>> collision;
+  final int layerIndex; // which layer these cells belong to
+
+  TileRegionData({
+    required this.width,
+    required this.height,
+    required this.tileColors,
+    required this.layerCells,
+    required this.collision,
+    required this.layerIndex,
+  });
+}
 
 class EditorGame extends FlameGame with ScrollDetector {
   final MapData mapData;
@@ -31,7 +50,6 @@ class EditorGame extends FlameGame with ScrollDetector {
 
   // Viewport (set at startPlay, cleared at stopPlay)
   int _vpW = 0, _vpH = 0;
-  Viewport? _savedViewport;
 
   // Play mode HUD callbacks — set by CenterCanvas
   void Function(int health, int score, int coins, int gems, int items)? onHudUpdate;
@@ -42,6 +60,7 @@ class EditorGame extends FlameGame with ScrollDetector {
   bool allowGameZoom = false;    // set from project.allowZoom before startPlay
   double gameMaxZoom = 2.0;     // set from project.maxZoom before startPlay
   bool allowCameraFollow = true; // set from project.cameraFollow before startPlay
+  bool pixelArt = true;          // set from project.pixelArt before startPlay
 
   EditorGame({required this.mapData, required this.spriteCache});
 
@@ -72,12 +91,14 @@ class EditorGame extends FlameGame with ScrollDetector {
 
     _camera = camera;
     _gridComponent = gridComp;
+    _gridComponent!.camera = camera; // needed for pixel-perfect tile snapping
+    _gridComponent!.pixelArt = pixelArt;
     _objectsComponent = objectsComp;
   }
 
   // ─── Play Mode ───────────────────────────────────────────────────────────────
 
-  Future<void> startPlay({int viewportWidth = 0, int viewportHeight = 0, List<dynamic>? effects, List<dynamic>? items, Map<String, String>? keyBindings}) async {
+  Future<void> startPlay({int viewportWidth = 0, int viewportHeight = 0, List<dynamic>? effects, List<dynamic>? items, Map<String, String>? keyBindings, double playerSpeed = 4.0}) async {
     if (_world == null || _camera == null) return;
     _vpW = viewportWidth;
     _vpH = viewportHeight;
@@ -122,26 +143,28 @@ class EditorGame extends FlameGame with ScrollDetector {
 
     // Hide editor overlays (save user's grid preference, always hide in play)
     _gridComponent?.showGrid = false;
+    _gridComponent?.showViewport = false;
     _objectsComponent?.hidden = true;
     _objectsComponent?.stopAllPreviews();
 
-    // Save camera state and apply viewport
+    // Save camera state
     _savedCameraPos = _camera!.viewfinder.position.clone();
     _savedZoom = _camera!.viewfinder.zoom;
-    _savedViewport = _camera!.viewport;
 
     final ts = mapData.tileSize.toDouble();
     final mapW = mapData.width * ts;
     final mapH = mapData.height * ts;
+    final minZ = max(canvasSize.x / mapW, canvasSize.y / mapH);
+    final maxZ = max(minZ, gameMaxZoom);
     if (_vpW > 0 && _vpH > 0) {
-      _camera!.viewport = FixedResolutionViewport(
-          resolution: Vector2(_vpW.toDouble(), _vpH.toDouble()));
-      final minZ = max(_vpW.toDouble() / mapW, _vpH.toDouble() / mapH);
-      final maxZ = max(minZ, gameMaxZoom);
-      _camera!.viewfinder.zoom = 1.0.clamp(minZ, maxZ);
+      // Derive zoom from canvas/viewport ratio instead of FixedResolutionViewport.
+      // FixedResolutionViewport adds a non-integer scale factor (canvas/vpW) on top
+      // of the world render, which maps tile boundaries to fractional screen pixels
+      // and causes visible gaps between tiles. By computing zoom directly from the
+      // canvas and target resolution, world→screen mapping stays integer-friendly.
+      final vpZoom = min(canvasSize.x / _vpW.toDouble(), canvasSize.y / _vpH.toDouble());
+      _camera!.viewfinder.zoom = vpZoom.clamp(minZ, maxZ);
     } else {
-      final minZ = max(canvasSize.x / mapW, canvasSize.y / mapH);
-      final maxZ = max(minZ, gameMaxZoom);
       final adaptive = canvasSize.y / (ts * 10.0);
       _camera!.viewfinder.zoom = adaptive.clamp(minZ, maxZ);
     }
@@ -154,6 +177,7 @@ class EditorGame extends FlameGame with ScrollDetector {
       effects: effects?.cast<GameEffect>() ?? [],
       items: items?.cast<ItemDef>() ?? [],
       keyBindings: keyBindings ?? {},
+      playerSpeed: playerSpeed,
       onHudUpdate: (h, s, c, g, i) => onHudUpdate?.call(h, s, c, g, i),
       onMessage: (msg) => onMessage?.call(msg),
       onGameEvent: (event) => onGameEvent?.call(event),
@@ -162,7 +186,9 @@ class EditorGame extends FlameGame with ScrollDetector {
     _playSession!.init();
 
     // Add a render-only Component to the World for world-space drawing
-    _playRenderer = PlayRenderer()..session = _playSession;
+    _playRenderer = PlayRenderer()
+      ..session = _playSession
+      ..camera = _camera;
     await _world!.add(_playRenderer!);
   }
 
@@ -176,6 +202,7 @@ class EditorGame extends FlameGame with ScrollDetector {
 
     // Restore editor overlays
     _gridComponent?.showGrid = _userShowGrid;
+    _gridComponent?.showViewport = true;
     _objectsComponent?.hidden = false;
     _objectsComponent?.resetClock();
 
@@ -187,12 +214,8 @@ class EditorGame extends FlameGame with ScrollDetector {
       _savedObjects = null;
     }
 
-    // Restore camera and viewport
+    // Restore camera
     if (_camera != null) {
-      if (_savedViewport != null) {
-        _camera!.viewport = _savedViewport!;
-        _savedViewport = null;
-      }
       if (_savedCameraPos != null) {
         _camera!.viewfinder.position = _savedCameraPos!;
         _savedCameraPos = null;
@@ -211,6 +234,11 @@ class EditorGame extends FlameGame with ScrollDetector {
 
   void setShowCollision(bool value) {
     _gridComponent?.showCollision = value;
+  }
+
+  void setPixelArt(bool value) {
+    pixelArt = value;
+    _gridComponent?.pixelArt = value;
   }
 
   @override
@@ -234,9 +262,9 @@ class EditorGame extends FlameGame with ScrollDetector {
     final mapW = mapData.width * ts;
     final mapH = mapData.height * ts;
 
-    // Use viewport dimensions if set, otherwise canvas size
-    final visW = _vpW > 0 ? _vpW.toDouble() / z : canvasSize.x / z;
-    final visH = _vpH > 0 ? _vpH.toDouble() / z : canvasSize.y / z;
+    // Visible world area = canvas / zoom (zoom already encodes the viewport resolution)
+    final visW = canvasSize.x / z;
+    final visH = canvasSize.y / z;
 
     double cx = _playSession!.playerPos.x - visW / 2;
     double cy = _playSession!.playerPos.y - visH / 2;
@@ -266,9 +294,7 @@ class EditorGame extends FlameGame with ScrollDetector {
       final ts2 = mapData.tileSize.toDouble();
       final mapW2 = mapData.width * ts2;
       final mapH2 = mapData.height * ts2;
-      final vpW = _vpW > 0 ? _vpW.toDouble() : canvasSize.x;
-      final vpH = _vpH > 0 ? _vpH.toDouble() : canvasSize.y;
-      final minZoom = max(vpW / mapW2, vpH / mapH2);
+      final minZoom = max(canvasSize.x / mapW2, canvasSize.y / mapH2);
       final maxZoom = max(minZoom, gameMaxZoom);
       _camera!.viewfinder.zoom =
           (_camera!.viewfinder.zoom * (info.scrollDelta.global.y < 0 ? 1.1 : 0.9))
@@ -329,27 +355,138 @@ class EditorGame extends FlameGame with ScrollDetector {
 
   // ─── Tile Painting ──────────────────────────────────────────────────────────
 
-  void paintTile(Offset screenPos, TileType type, {int variant = 0}) {
+  void paintTile(Offset screenPos, Color color, {int layerIndex = 0}) {
     final tile = screenToTile(screenPos);
     if (tile == null) return;
-    mapData.setTile(tile.$1, tile.$2, type, variant: variant);
+    mapData.setLayerColor(layerIndex, tile.$1, tile.$2, color.value);
   }
 
-  void floodFill(Offset screenPos, TileType type, {int variant = 0}) {
+  /// Erases the active layer cell at [screenPos].
+  void eraseTile(Offset screenPos, {int layerIndex = 0}) {
     final tile = screenToTile(screenPos);
     if (tile == null) return;
-    mapData.floodFill(tile.$1, tile.$2, type, variant: variant);
+    mapData.setTileColor(tile.$1, tile.$2, 0); // also clear legacy color
+    mapData.setLayerCell(layerIndex, tile.$1, tile.$2, null);
   }
 
-  void fillRect(Offset startScreen, Offset endScreen, TileType type, {int variant = 0}) {
+  void floodFill(Offset screenPos, Color color, {int layerIndex = 0}) {
+    final tile = screenToTile(screenPos);
+    if (tile == null) return;
+    mapData.floodFillLayerColor(tile.$1, tile.$2, color.value, layerIndex: layerIndex);
+  }
+
+  void fillRect(Offset startScreen, Offset endScreen, Color color, {int layerIndex = 0}) {
     final a = screenToTile(startScreen);
     final b = screenToTile(endScreen);
     if (a == null || b == null) return;
-    mapData.fillRect(a.$1, a.$2, b.$1, b.$2, type, variant: variant);
+    mapData.fillRectLayerColor(a.$1, a.$2, b.$1, b.$2, color.value, layerIndex: layerIndex);
   }
 
-  void fillAll(TileType type, {int variant = 0}) {
-    mapData.fillAll(type, variant: variant);
+  /// Erases all base tile colors AND clears all cells across every layer.
+  void eraseAllLayers() {
+    mapData.fillAll(0);
+    for (int li = 0; li < mapData.layers.length; li++) {
+      for (int ty = 0; ty < mapData.height; ty++) {
+        for (int tx = 0; tx < mapData.width; tx++) {
+          mapData.setLayerCell(li, tx, ty, null);
+        }
+      }
+    }
+  }
+
+  void fillAll(Color color) {
+    mapData.fillAll(color.value);
+  }
+
+  // ─── Tileset Brush Painting ──────────────────────────────────────────────────
+
+  /// Stamps the full brush region onto the map with its top-left at [screenPos].
+  void paintTilesetBrush(Offset screenPos, TilesetBrush brush, {int layerIndex = 0}) {
+    final anchor = screenToTile(screenPos);
+    if (anchor == null) return;
+    for (int dy = 0; dy < brush.height; dy++) {
+      for (int dx = 0; dx < brush.width; dx++) {
+        final tx = anchor.$1 + dx;
+        final ty = anchor.$2 + dy;
+        mapData.setLayerCell(layerIndex, tx, ty, brush.cellAt(dx, dy));
+      }
+    }
+  }
+
+  void floodFillTileset(Offset screenPos, TilesetBrush brush, {int layerIndex = 0}) {
+    final tile = screenToTile(screenPos);
+    if (tile == null) return;
+    mapData.floodFillTileset(tile.$1, tile.$2, brush.cellAt(0, 0), layerIndex: layerIndex);
+  }
+
+  void fillRectTileset(Offset startScreen, Offset endScreen, TilesetBrush brush, {int layerIndex = 0}) {
+    final a = screenToTile(startScreen);
+    final b = screenToTile(endScreen);
+    if (a == null || b == null) return;
+    final minX = a.$1 < b.$1 ? a.$1 : b.$1;
+    final maxX = a.$1 < b.$1 ? b.$1 : a.$1;
+    final minY = a.$2 < b.$2 ? a.$2 : b.$2;
+    final maxY = a.$2 < b.$2 ? b.$2 : a.$2;
+    for (int ty = minY; ty <= maxY; ty++) {
+      for (int tx = minX; tx <= maxX; tx++) {
+        if (!mapData.inBounds(tx, ty)) continue;
+        final dx = (tx - minX) % brush.width;
+        final dy = (ty - minY) % brush.height;
+        mapData.setLayerCell(layerIndex, tx, ty, brush.cellAt(dx, dy));
+      }
+    }
+  }
+
+  void fillAllTileset(TilesetBrush brush, {int layerIndex = 0}) {
+    for (int ty = 0; ty < mapData.height; ty++) {
+      for (int tx = 0; tx < mapData.width; tx++) {
+        final dx = tx % brush.width;
+        final dy = ty % brush.height;
+        mapData.setLayerCell(layerIndex, tx, ty, brush.cellAt(dx, dy));
+      }
+    }
+  }
+
+  // ─── Tile Region Selection (cut/move/erase) ──────────────────────────────────
+
+  /// Snapshot of tile data for a rectangular region (tileColors + active layer cells).
+  TileRegionData copyRegion(int x1, int y1, int x2, int y2, {int layerIndex = 0}) {
+    final w = x2 - x1 + 1;
+    final h = y2 - y1 + 1;
+    return TileRegionData(
+      width: w,
+      height: h,
+      layerIndex: layerIndex,
+      tileColors: List.generate(h, (dy) =>
+          List.generate(w, (dx) => mapData.tileColors[y1 + dy][x1 + dx])),
+      layerCells: List.generate(h, (dy) =>
+          List.generate(w, (dx) => mapData.getLayerCell(layerIndex, x1 + dx, y1 + dy))),
+      collision: List.generate(h, (dy) =>
+          List.generate(w, (dx) => mapData.tileCollision[y1 + dy][x1 + dx])),
+    );
+  }
+
+  void eraseRegion(int x1, int y1, int x2, int y2, {int layerIndex = 0}) {
+    for (int ty = y1; ty <= y2; ty++) {
+      for (int tx = x1; tx <= x2; tx++) {
+        if (!mapData.inBounds(tx, ty)) continue;
+        mapData.tileColors[ty][tx] = 0;
+        mapData.setLayerCell(layerIndex, tx, ty, null);
+      }
+    }
+  }
+
+  void pasteRegion(TileRegionData data, int destX, int destY) {
+    for (int dy = 0; dy < data.height; dy++) {
+      for (int dx = 0; dx < data.width; dx++) {
+        final tx = destX + dx;
+        final ty = destY + dy;
+        if (!mapData.inBounds(tx, ty)) continue;
+        mapData.tileColors[ty][tx] = data.tileColors[dy][dx];
+        mapData.setLayerCell(data.layerIndex, tx, ty, data.layerCells[dy][dx]);
+        mapData.tileCollision[ty][tx] = data.collision[dy][dx];
+      }
+    }
   }
 
   // ─── Collision Toggle ────────────────────────────────────────────────────────

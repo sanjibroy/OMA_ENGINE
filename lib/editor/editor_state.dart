@@ -1,26 +1,28 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show Color;
 import '../models/game_object.dart';
 import '../models/game_project.dart';
 import '../models/game_rule.dart';
 import '../models/map_data.dart';
+import '../models/tileset_def.dart';
 import '../services/audio_manager.dart';
 import '../services/project_service.dart';
 import '../services/sprite_cache.dart';
 import 'editor_game.dart';
 
-enum EditorTool { tile, object, collision, fill, rect }
+enum EditorTool { tile, object, collision, fill, rect, erase, select }
 
 class _UndoSnapshot {
-  final List<List<int>> tiles;
-  final List<List<int>> variants;
+  final List<List<int>> tileColors;
   final List<List<int>> collision;
+  final List<TileLayer> layers; // full layer snapshots
   final String objectsJson;
   final String rulesJson;
   _UndoSnapshot({
-    required this.tiles,
-    required this.variants,
+    required this.tileColors,
     required this.collision,
+    required this.layers,
     required this.objectsJson,
     required this.rulesJson,
   });
@@ -51,8 +53,7 @@ class EditorState {
   static const _kMaxUndoSteps = 50;
 
   // ─── Editor notifiers ──────────────────────────────────────────────────────
-  final ValueNotifier<TileType> selectedTile;
-  final ValueNotifier<int> selectedTileVariant;
+  final ValueNotifier<Color> selectedPaintColor;
   final ValueNotifier<GameObjectType> selectedObjectType;
   /// Which sprite variant is "active" for placement per type. Mutable map, no notifier needed.
   final Map<GameObjectType, int> selectedVariantIndex = {};
@@ -67,6 +68,13 @@ class EditorState {
   final ValueNotifier<int> redoCount;
   final ValueNotifier<bool> isDirty;
   final ValueNotifier<bool> sortEditMode;
+  // ─── Tileset brush ─────────────────────────────────────────────────────────
+  final ValueNotifier<TilesetBrush?> selectedBrush; // current tileset brush
+  // ─── Active layer ──────────────────────────────────────────────────────────
+  final ValueNotifier<int> activeLayerIndex;
+  // ─── Map tile selection ────────────────────────────────────────────────────
+  /// Normalized tile-coord selection rect: (x1, y1, x2, y2) inclusive.
+  final ValueNotifier<(int, int, int, int)?> selectedMapRegion;
 
   String get currentMapId => _currentMapId;
 
@@ -83,8 +91,7 @@ class EditorState {
   EditorState({required this.mapData})
       : project = _defaultProject(),
         _currentMapId = _kInitialMapId,
-        selectedTile = ValueNotifier(TileType.grass),
-        selectedTileVariant = ValueNotifier(0),
+        selectedPaintColor = ValueNotifier(const Color(0xFF3A7D44)),
         selectedObjectType = ValueNotifier(GameObjectType.playerSpawn),
         selectedObject = ValueNotifier(null),
         activeTool = ValueNotifier(EditorTool.tile),
@@ -96,7 +103,10 @@ class EditorState {
         undoCount = ValueNotifier(0),
         redoCount = ValueNotifier(0),
         isDirty = ValueNotifier(false),
-        sortEditMode = ValueNotifier(false) {
+        sortEditMode = ValueNotifier(false),
+        selectedBrush = ValueNotifier(null),
+        activeLayerIndex = ValueNotifier(0),
+        selectedMapRegion = ValueNotifier(null) {
     game = EditorGame(mapData: mapData, spriteCache: spriteCache);
   }
 
@@ -123,11 +133,9 @@ class EditorState {
   // ─── Undo / Redo ───────────────────────────────────────────────────────────
 
   _UndoSnapshot _snapshot() => _UndoSnapshot(
-        tiles: mapData.tiles
-            .map((row) => List<int>.from(row.map((t) => t.index)))
-            .toList(),
-        variants: mapData.tileVariants.map((row) => List<int>.from(row)).toList(),
+        tileColors: mapData.tileColors.map((row) => List<int>.from(row)).toList(),
         collision: mapData.tileCollision.map((row) => List<int>.from(row)).toList(),
+        layers: mapData.layers.map((l) => l.snapshot()).toList(),
         objectsJson: jsonEncode(mapData.objects.map((o) => o.toJson()).toList()),
         rulesJson: jsonEncode(mapData.rules.map((r) => r.toJson()).toList()),
       );
@@ -161,11 +169,13 @@ class EditorState {
   }
 
   void _restore(_UndoSnapshot s) {
-    mapData.tiles = s.tiles.map((row) {
-      return row.map((i) => TileType.values[i]).toList();
-    }).toList();
-    mapData.tileVariants = s.variants.map((row) => List<int>.from(row)).toList();
+    mapData.tileColors = s.tileColors.map((row) => List<int>.from(row)).toList();
     mapData.tileCollision = s.collision.map((row) => List<int>.from(row)).toList();
+    mapData.layers = s.layers.map((l) => l.snapshot()).toList();
+    // Clamp active layer index in case layer count changed
+    if (activeLayerIndex.value >= mapData.layers.length) {
+      activeLayerIndex.value = mapData.layers.length - 1;
+    }
     final objList = jsonDecode(s.objectsJson) as List;
     mapData.objects = objList
         .map((o) => GameObject.fromJson(o as Map<String, dynamic>))
@@ -174,6 +184,56 @@ class EditorState {
     mapData.rules = ruleList
         .map((r) => GameRule.fromJson(r as Map<String, dynamic>))
         .toList();
+  }
+
+  // ─── Layer management ──────────────────────────────────────────────────────
+
+  void addLayer(String name) {
+    pushUndo();
+    final layer = TileLayer.empty(name, mapData.width, mapData.height);
+    mapData.layers.add(layer);
+    activeLayerIndex.value = mapData.layers.length - 1;
+    notifyMapChanged();
+  }
+
+  void removeLayer(int index) {
+    if (mapData.layers.length <= 1) return;
+    pushUndo();
+    mapData.layers.removeAt(index);
+    if (activeLayerIndex.value >= mapData.layers.length) {
+      activeLayerIndex.value = mapData.layers.length - 1;
+    }
+    notifyMapChanged();
+  }
+
+  void renameLayer(int index, String name) {
+    if (index < 0 || index >= mapData.layers.length) return;
+    mapData.layers[index].name = name;
+    notifyMapChanged();
+  }
+
+  void moveLayerUp(int index) {
+    if (index <= 0) return;
+    pushUndo();
+    final layer = mapData.layers.removeAt(index);
+    mapData.layers.insert(index - 1, layer);
+    activeLayerIndex.value = index - 1;
+    notifyMapChanged();
+  }
+
+  void moveLayerDown(int index) {
+    if (index >= mapData.layers.length - 1) return;
+    pushUndo();
+    final layer = mapData.layers.removeAt(index);
+    mapData.layers.insert(index + 1, layer);
+    activeLayerIndex.value = index + 1;
+    notifyMapChanged();
+  }
+
+  void toggleLayerVisible(int index) {
+    if (index < 0 || index >= mapData.layers.length) return;
+    mapData.layers[index].visible = !mapData.layers[index].visible;
+    notifyMapChanged();
   }
 
   // ─── Sprite helpers ────────────────────────────────────────────────────────
@@ -186,9 +246,9 @@ class EditorState {
     } else {
       await spriteCache.loadFromPaths(mapData.spritePaths);
     }
-    await spriteCache.loadTileFromPaths(mapData.tileSpritesPaths);
     await spriteCache.loadAnimFromPaths(mapData.animPaths, mapData.animFps, mapData.animDefaults);
     await spriteCache.loadAnimFromSheets(mapData.animSheets, mapData.animFps, mapData.animDefaults);
+    await spriteCache.loadTilesets(mapData.tilesets);
   }
 
   // ─── Map switching ─────────────────────────────────────────────────────────
@@ -220,8 +280,8 @@ class EditorState {
 
     _currentMapId = mapId;
     selectedObject.value = null;
-    selectedTile.value = TileType.grass;
-    selectedTileVariant.value = 0;
+    selectedPaintColor.value = const Color(0xFF3A7D44);
+    activeLayerIndex.value = 0;
     await reloadSprites();
     _suppressDirty = true;
     notifyMapChanged();
@@ -330,8 +390,7 @@ class EditorState {
   void dispose() {
     audioManager.dispose();
     spriteCache.dispose();
-    selectedTile.dispose();
-    selectedTileVariant.dispose();
+    selectedPaintColor.dispose();
     selectedObjectType.dispose();
     selectedObject.dispose();
     activeTool.dispose();
@@ -344,5 +403,8 @@ class EditorState {
     redoCount.dispose();
     isDirty.dispose();
     sortEditMode.dispose();
+    selectedBrush.dispose();
+    activeLayerIndex.dispose();
+    selectedMapRegion.dispose();
   }
 }

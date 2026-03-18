@@ -186,6 +186,16 @@ class _ProjectSettingsDialogState extends State<ProjectSettingsDialog> {
                   _sectionLabel('GAME OPTIONS'),
                   const SizedBox(height: 10),
                   _buildToggleRow(
+                    label: 'Pixel art mode',
+                    description: 'Nearest-neighbor filtering — keeps sprites crisp (recommended for pixel art)',
+                    value: _proj.pixelArt,
+                    onChanged: (v) {
+                      setState(() => _proj.pixelArt = v);
+                      widget.onChanged();
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  _buildToggleRow(
                     label: 'Camera follows player',
                     description: 'Camera tracks the player during gameplay',
                     value: _proj.cameraFollow,

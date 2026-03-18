@@ -1,5 +1,6 @@
 import 'dart:math' show pi, sin, cos, atan2, sqrt, max, Random;
 import 'dart:ui' as ui;
+import 'package:flame/camera.dart';
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HardwareKeyboard, LogicalKeyboardKey;
@@ -247,11 +248,12 @@ class PlaySession {
     required this.effects,
     this.items = const [],
     this.keyBindings = const {},
+    double playerSpeed = 4.0,
     required this.onHudUpdate,
     required this.onMessage,
     required this.onGameEvent,
     this.onEquippedItemChanged,
-  });
+  }) : _playerSpeedTiles = playerSpeed;
 
   /// Resolves the physical key bound to a key trigger type.
   /// Returns null if no custom binding (caller uses the default key).
@@ -300,16 +302,6 @@ class PlaySession {
   // Called once synchronously before the first update()
   void init() {
     final ts = mapData.tileSize.toDouble();
-
-    // Read player speed from any movePlayer action
-    for (final rule in rules.where((r) => r.enabled)) {
-      for (final action in rule.actions) {
-        if (action.type == ActionType.movePlayer) {
-          _playerSpeedTiles = ((action.params['speed'] as int?) ?? 4).toDouble();
-          break;
-        }
-      }
-    }
 
     // Place player at spawn, or top-left corner
     final spawns = mapData.objects.where((o) => o.type == GameObjectType.playerSpawn);
@@ -582,10 +574,16 @@ class PlaySession {
     bool right = keys.contains(LogicalKeyboardKey.arrowRight) || keys.contains(_boundKey(TriggerType.keyRightPressed) ?? LogicalKeyboardKey.keyD);
     bool space = keys.contains(_boundKey(TriggerType.keySpacePressed) ?? LogicalKeyboardKey.space);
 
-    if (up)    _fireKey(TriggerType.keyUpPressed,    dt, dirX:  0, dirY: -1);
-    if (down)  _fireKey(TriggerType.keyDownPressed,  dt, dirX:  0, dirY:  1);
-    if (left)  _fireKey(TriggerType.keyLeftPressed,  dt, dirX: -1, dirY:  0);
-    if (right) _fireKey(TriggerType.keyRightPressed, dt, dirX:  1, dirY:  0);
+    // Normalize diagonal movement so speed is consistent in all directions.
+    final rawDX = (right ? 1.0 : 0.0) - (left ? 1.0 : 0.0);
+    final rawDY = (down  ? 1.0 : 0.0) - (up   ? 1.0 : 0.0);
+    final moveMag = sqrt(rawDX * rawDX + rawDY * rawDY);
+    final diagScale = moveMag > 0 ? 1.0 / moveMag : 1.0;
+
+    if (up)    _fireKey(TriggerType.keyUpPressed,    dt, dirX:  0,          dirY: -diagScale);
+    if (down)  _fireKey(TriggerType.keyDownPressed,  dt, dirX:  0,          dirY:  diagScale);
+    if (left)  _fireKey(TriggerType.keyLeftPressed,  dt, dirX: -diagScale,  dirY:  0);
+    if (right) _fireKey(TriggerType.keyRightPressed, dt, dirX:  diagScale,  dirY:  0);
     if (space) _fireKey(TriggerType.keySpacePressed, dt, dirX:  0, dirY:  0);
 
     // Update facing direction from movement input
@@ -613,11 +611,14 @@ class PlaySession {
 
     if (!hasMovementRules) {
       double dx = 0, dy = 0;
-      if (up)    dy -= spd;
-      if (down)  dy += spd;
-      if (left)  dx -= spd;
-      if (right) dx += spd;
-      _movePlayer(dx, dy);
+      if (up)    dy -= 1;
+      if (down)  dy += 1;
+      if (left)  dx -= 1;
+      if (right) dx += 1;
+      if (dx != 0 || dy != 0) {
+        final len = sqrt(dx * dx + dy * dy);
+        _movePlayer(dx / len * spd, dy / len * spd);
+      }
     }
   }
 
@@ -632,7 +633,6 @@ class PlaySession {
     final col = mapData.getTileCollision(tx, ty);
     if (col == 1) return false;
     if (col == 2) return true;
-    if (mapData.getTile(tx, ty).isSolid) return true;
     for (final obj in mapData.objects) {
       if (_hiddenObjectIds.contains(obj.id)) continue;
       if (obj.tileX != tx || obj.tileY != ty) continue;
@@ -1270,8 +1270,7 @@ class PlaySession {
     for (final a in actions) {
       switch (a.type) {
         case ActionType.movePlayer:
-          final speed = ((a.params['speed'] as int?) ?? 4).toDouble();
-          final spd = speed * ts * dt * _waterSpeedMult;
+          final spd = _playerSpeedTiles * ts * dt * _waterSpeedMult;
           _movePlayer(dirX * spd, dirY * spd);
         case ActionType.adjustHealth:
           final delta = (a.params['value'] as int?) ?? 0;
@@ -1677,9 +1676,15 @@ class PlaySession {
     }
   }
 
-  void render(Canvas canvas) {
+  void render(Canvas canvas, {double cameraX = 0, double cameraY = 0, double zoom = 1.0}) {
     final ts = mapData.tileSize.toDouble();
     final r = ts * 0.32;
+
+    // Snap a world coordinate to the nearest device pixel, matching GridComponent.
+    final dpr = ui.PlatformDispatcher.instance.implicitView?.devicePixelRatio ?? 1.0;
+    final zd = zoom * dpr;
+    double snapX(double wx) => zd > 0 ? ((wx - cameraX) * zd).roundToDouble() / zd + cameraX : wx;
+    double snapY(double wy) => zd > 0 ? ((wy - cameraY) * zd).roundToDouble() / zd + cameraY : wy;
 
     // Water body overlays — drawn first, below everything
     for (final obj in mapData.objects) {
@@ -1723,8 +1728,8 @@ class PlaySession {
           ? e.source.floatAmplitude * sin(2 * pi * e.source.floatSpeed * _elapsedSec)
           : 0.0;
       final (fxDx, fxDy) = _fxOffset(e.source, ts);
-      final cx = e.pos.x + fxDx;
-      final cy = e.pos.y + floatY + fxDy;
+      final cx = snapX(e.pos.x + fxDx);
+      final cy = snapY(e.pos.y + floatY + fxDy);
       queue.add((
         zOrder: e.source.zOrder,
         worldY: e.pos.y,
@@ -1745,7 +1750,8 @@ class PlaySession {
       final playerFloatY = (spawn != null && spawn.floatEnabled)
           ? spawn.floatAmplitude * sin(2 * pi * spawn.floatSpeed * _elapsedSec)
           : 0.0;
-      final playerDrawY = _playerPos.y + playerFloatY;
+      final playerDrawX = snapX(_playerPos.x);
+      final playerDrawY = snapY(_playerPos.y + playerFloatY);
       queue.add((
         zOrder: playerZOrder,
         worldY: _playerPos.y,
@@ -1755,11 +1761,11 @@ class PlaySession {
               useAnimation: mapData.getVariantUseAnimation(
                   GameObjectType.playerSpawn, spawn?.variantIndex ?? 0));
           if (playerSprite != null) {
-            _drawSprite(canvas, playerSprite, _playerPos.x, playerDrawY, ts,
+            _drawSprite(canvas, playerSprite, playerDrawX, playerDrawY, ts,
                 flipH: _playerFlipH, flipV: _playerFlipV,
                 scale: _playerScale, rotation: _playerRotation, alpha: _playerAlpha);
           } else {
-            _drawCircle(canvas, Offset(_playerPos.x, playerDrawY), r,
+            _drawCircle(canvas, Offset(playerDrawX, playerDrawY), r,
                 const Color(0xFF4ADE80), Icons.person, alpha: _playerAlpha);
           }
         },
@@ -1781,8 +1787,8 @@ class PlaySession {
       if (e.hidden) continue;
       if (e.health < e.maxHealth && e.maxHealth > 0) {
         final barW = ts * 0.7;
-        final barLeft = e.pos.x - barW / 2;
-        final barTop = e.pos.y - ts * 0.65;
+        final barLeft = snapX(e.pos.x) - barW / 2;
+        final barTop = snapY(e.pos.y) - ts * 0.65;
         final pct = (e.health / e.maxHealth).clamp(0.0, 1.0);
         canvas.drawRect(Rect.fromLTWH(barLeft, barTop, barW, 3),
             Paint()..color = Colors.black54);
@@ -2150,9 +2156,13 @@ class PlaySession {
 
 class PlayRenderer extends Component {
   PlaySession? session;
+  CameraComponent? camera;
 
   @override
   void render(Canvas canvas) {
-    session?.render(canvas);
+    final z = camera?.viewfinder.zoom ?? 1.0;
+    final cx = camera?.viewfinder.position.x ?? 0.0;
+    final cy = camera?.viewfinder.position.y ?? 0.0;
+    session?.render(canvas, cameraX: cx, cameraY: cy, zoom: z);
   }
 }

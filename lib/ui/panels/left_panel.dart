@@ -1,10 +1,12 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../editor/editor_state.dart';
 import '../../models/game_object.dart';
 import '../../models/game_project.dart';
-import '../../models/map_data.dart';
+import '../../models/tileset_def.dart';
 import '../../theme/app_theme.dart';
 import '../dialogs/new_map_dialog.dart';
 // import '../dialogs/animations_dialog.dart' // moved to right_panel;
@@ -378,263 +380,973 @@ class _TilesList extends StatefulWidget {
 }
 
 class _TilesListState extends State<_TilesList> {
-  static const _paintableTiles = [
-    TileType.grass,
-    TileType.wall,
-    TileType.water,
-    TileType.sand,
-    TileType.stone,
-    TileType.woodFloor,
-  ];
-
   @override
   void initState() {
     super.initState();
-    widget.editorState.selectedTile.addListener(_onSelectionChanged);
-    widget.editorState.selectedTileVariant.addListener(_onSelectionChanged);
-    widget.editorState.activeTool.addListener(_onSelectionChanged);
+    widget.editorState.activeTool.addListener(_rebuild);
+    widget.editorState.selectedBrush.addListener(_rebuild);
+    widget.editorState.mapChanged.addListener(_rebuild);
   }
 
   @override
   void dispose() {
-    widget.editorState.selectedTile.removeListener(_onSelectionChanged);
-    widget.editorState.selectedTileVariant.removeListener(_onSelectionChanged);
-    widget.editorState.activeTool.removeListener(_onSelectionChanged);
+    widget.editorState.activeTool.removeListener(_rebuild);
+    widget.editorState.selectedBrush.removeListener(_rebuild);
+    widget.editorState.mapChanged.removeListener(_rebuild);
     super.dispose();
   }
 
-  void _onSelectionChanged() => setState(() {});
+  void _rebuild() => setState(() {});
 
   void _fillAll() {
     final es = widget.editorState;
     es.pushUndo();
-    es.game.fillAll(es.selectedTile.value, variant: es.selectedTileVariant.value);
+    final brush = es.selectedBrush.value;
+    if (brush != null) {
+      es.game.fillAllTileset(brush, layerIndex: es.activeLayerIndex.value);
+    }
     es.notifyMapChanged();
   }
 
-  void _eraseAll() {
+  Future<void> _eraseAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF201E1C),
+        title: const Text('Erase entire map?', style: TextStyle(color: Colors.white)),
+        content: const Text('This will clear all tiles and all layer sprites. This cannot be undone after saving.',
+            style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Erase', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
     final es = widget.editorState;
     es.pushUndo();
-    es.game.fillAll(TileType.empty);
+    es.game.eraseAllLayers();
     es.notifyMapChanged();
   }
 
-  Future<void> _addVariant(TileType tile) async {
+  @override
+  Widget build(BuildContext context) {
+    final es = widget.editorState;
+    final activeTool = es.activeTool.value;
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Tool strip ────────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+            child: Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: [
+                _TileToolBtn(
+                  icon: Icons.edit_outlined,
+                  tooltip: 'Paint',
+                  active: activeTool == EditorTool.tile,
+                  onTap: () => es.activeTool.value = EditorTool.tile,
+                ),
+                _TileToolBtn(
+                  icon: Icons.format_color_fill,
+                  tooltip: 'Flood Fill',
+                  active: activeTool == EditorTool.fill,
+                  onTap: () => es.activeTool.value = EditorTool.fill,
+                ),
+                _TileToolBtn(
+                  icon: Icons.crop_square,
+                  tooltip: 'Rectangle Fill',
+                  active: activeTool == EditorTool.rect,
+                  onTap: () => es.activeTool.value = EditorTool.rect,
+                ),
+                _TileToolBtn(
+                  icon: Icons.auto_fix_off_outlined,
+                  tooltip: 'Eraser — click or drag to erase tiles',
+                  active: activeTool == EditorTool.erase,
+                  onTap: () => es.activeTool.value = EditorTool.erase,
+                ),
+                _TileToolBtn(
+                  icon: Icons.highlight_alt,
+                  tooltip: 'Select (marquee) — move or delete painted tiles',
+                  active: activeTool == EditorTool.select,
+                  onTap: () => es.activeTool.value = EditorTool.select,
+                ),
+                _TileToolBtn(
+                  icon: Icons.select_all,
+                  tooltip: 'Fill entire map with selected tile',
+                  active: false,
+                  onTap: _fillAll,
+                ),
+                _TileToolBtn(
+                  icon: Icons.delete_sweep_outlined,
+                  tooltip: 'Erase entire map',
+                  active: false,
+                  danger: true,
+                  onTap: _eraseAll,
+                ),
+              ],
+            ),
+          ),
+          Container(height: 1, color: AppColors.borderColor),
+          // ── Layers ────────────────────────────────────────────────────────
+          _LayersSection(editorState: es),
+          Container(height: 1, color: AppColors.borderColor),
+          // ── Tilesets ──────────────────────────────────────────────────────
+          _TilesetsSection(editorState: es),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Layers Section ───────────────────────────────────────────────────────────
+
+class _LayersSection extends StatefulWidget {
+  final EditorState editorState;
+  const _LayersSection({required this.editorState});
+
+  @override
+  State<_LayersSection> createState() => _LayersSectionState();
+}
+
+class _LayersSectionState extends State<_LayersSection> {
+  EditorState get _es => widget.editorState;
+
+  @override
+  void initState() {
+    super.initState();
+    _es.mapChanged.addListener(_rebuild);
+    _es.activeLayerIndex.addListener(_rebuild);
+  }
+
+  @override
+  void dispose() {
+    _es.mapChanged.removeListener(_rebuild);
+    _es.activeLayerIndex.removeListener(_rebuild);
+    super.dispose();
+  }
+
+  void _rebuild() => setState(() {});
+
+  Future<void> _addLayer() async {
+    final ctrl = TextEditingController(text: 'Layer ${_es.mapData.layers.length + 1}');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.dialogBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: AppColors.borderColor),
+        ),
+        title: const Text('New Layer',
+            style: TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: AppColors.surfaceBg,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: const BorderSide(color: AppColors.borderColor),
+            ),
+          ),
+          onSubmitted: (v) => Navigator.pop(context, v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel',
+                  style: TextStyle(color: AppColors.textSecondary))),
+          TextButton(
+              onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+              child: const Text('Add',
+                  style: TextStyle(color: AppColors.accent))),
+        ],
+      ),
+    );
+    if (name != null && name.isNotEmpty) {
+      _es.addLayer(name);
+    }
+  }
+
+  Future<void> _renameLayer(int index) async {
+    final ctrl = TextEditingController(text: _es.mapData.layers[index].name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.dialogBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: AppColors.borderColor),
+        ),
+        title: const Text('Rename Layer',
+            style: TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: AppColors.surfaceBg,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: const BorderSide(color: AppColors.borderColor),
+            ),
+          ),
+          onSubmitted: (v) => Navigator.pop(context, v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel',
+                  style: TextStyle(color: AppColors.textSecondary))),
+          TextButton(
+              onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+              child: const Text('Rename',
+                  style: TextStyle(color: AppColors.accent))),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (name != null && name.isNotEmpty) {
+      _es.renameLayer(index, name);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final layers = _es.mapData.layers;
+    final activeIdx = _es.activeLayerIndex.value;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            children: [
+              const Text('LAYERS',
+                  style: TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.0)),
+              const Spacer(),
+              GestureDetector(
+                onTap: _addLayer,
+                child: const Tooltip(
+                  message: 'Add layer',
+                  child: Icon(Icons.add, size: 14, color: AppColors.textMuted),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Layer list (top = rendered last = visually on top)
+        ...List.generate(layers.length, (i) {
+          // Display reversed so top of list = topmost layer
+          final idx = layers.length - 1 - i;
+          final layer = layers[idx];
+          final isActive = idx == activeIdx;
+          return GestureDetector(
+            onTap: () => setState(() => _es.activeLayerIndex.value = idx),
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: BoxDecoration(
+                color: isActive
+                    ? AppColors.accent.withOpacity(0.12)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(
+                    color: isActive ? AppColors.accent : Colors.transparent),
+              ),
+              child: Row(
+                children: [
+                  // Visibility eye
+                  GestureDetector(
+                    onTap: () => _es.toggleLayerVisible(idx),
+                    child: Icon(
+                      layer.visible
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                      size: 13,
+                      color: layer.visible
+                          ? (isActive ? AppColors.accent : AppColors.textSecondary)
+                          : AppColors.textMuted,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  // Layer name
+                  Expanded(
+                    child: Text(
+                      layer.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isActive
+                            ? AppColors.textPrimary
+                            : AppColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                  // Move up/down
+                  if (idx < layers.length - 1)
+                    GestureDetector(
+                      onTap: () => _es.moveLayerDown(idx),
+                      child: const Tooltip(
+                        message: 'Move layer up',
+                        child: Icon(Icons.keyboard_arrow_up,
+                            size: 13, color: AppColors.textMuted),
+                      ),
+                    ),
+                  if (idx > 0)
+                    GestureDetector(
+                      onTap: () => _es.moveLayerUp(idx),
+                      child: const Tooltip(
+                        message: 'Move layer down',
+                        child: Icon(Icons.keyboard_arrow_down,
+                            size: 13, color: AppColors.textMuted),
+                      ),
+                    ),
+                  const SizedBox(width: 2),
+                  // Context menu
+                  GestureDetector(
+                    onTap: () => _showLayerMenu(context, idx),
+                    child: const Icon(Icons.more_vert,
+                        size: 12, color: AppColors.textMuted),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+
+        const SizedBox(height: 4),
+      ],
+    );
+  }
+
+  void _showLayerMenu(BuildContext context, int index) {
+    showMenu<String>(
+      context: context,
+      color: AppColors.dialogBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: const BorderSide(color: AppColors.borderColor),
+      ),
+      position: RelativeRect.fill,
+      items: [
+        const PopupMenuItem(
+          value: 'rename',
+          child: _MenuItem(Icons.edit_outlined, 'Rename'),
+        ),
+        if (_es.mapData.layers.length > 1)
+          const PopupMenuItem(
+            value: 'delete',
+            child: _MenuItem(Icons.delete_outline, 'Delete', danger: true),
+          ),
+      ],
+    ).then((val) async {
+      if (!mounted) return;
+      if (val == 'rename') await _renameLayer(index);
+      if (val == 'delete') _es.removeLayer(index);
+    });
+  }
+}
+
+// ─── Tilesets Section ─────────────────────────────────────────────────────────
+
+class _TilesetsSection extends StatefulWidget {
+  final EditorState editorState;
+  const _TilesetsSection({required this.editorState});
+
+  @override
+  State<_TilesetsSection> createState() => _TilesetsSectionState();
+}
+
+class _TilesetsSectionState extends State<_TilesetsSection> {
+  bool _expanded = true;
+  String? _expandedTilesetId; // which tileset viewer is open
+
+  EditorState get _es => widget.editorState;
+
+  Future<void> _importTileset() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['png', 'jpg', 'jpeg', 'webp'],
     );
     if (result == null || result.files.single.path == null) return;
     final path = result.files.single.path!;
-    final index =
-        await widget.editorState.spriteCache.addTileSprite(tile, path);
-    if (index != null) {
-      widget.editorState.mapData.tileSpritesPaths
-          .putIfAbsent(tile.name, () => [])
-          .add(path);
-      // Auto-select the new variant
-      widget.editorState.selectedTile.value = tile;
-      widget.editorState.selectedTileVariant.value = index;
-      setState(() {});
-    }
+
+    // Get image dimensions to compute columns/rows
+    final bytes = await File(path).readAsBytes();
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final imgW = frame.image.width;
+    final imgH = frame.image.height;
+    frame.image.dispose();
+
+    if (!mounted) return;
+
+    // Show config dialog
+    final config = await _showTilesetImportDialog(path, imgW, imgH);
+    if (config == null) return;
+
+    final def = TilesetDef(
+      name: config.name,
+      imagePath: path,
+      tileWidth: config.tileWidth,
+      tileHeight: config.tileHeight,
+      columns: imgW ~/ config.tileWidth,
+      rows: imgH ~/ config.tileHeight,
+    );
+
+    _es.mapData.tilesets.add(def);
+    await _es.spriteCache.loadTileset(def);
+    _es.notifyMapChanged();
+
+    setState(() {
+      _expandedTilesetId = def.id;
+    });
   }
 
-  void _removeVariant(TileType tile, int index) {
-    widget.editorState.spriteCache.removeTileSprite(tile, index);
-    final paths = widget.editorState.mapData.tileSpritesPaths[tile.name];
-    if (paths != null && index < paths.length) {
-      paths.removeAt(index);
-      if (paths.isEmpty) {
-        widget.editorState.mapData.tileSpritesPaths.remove(tile.name);
+  Future<_TilesetImportConfig?> _showTilesetImportDialog(String path, int imgW, int imgH) {
+    final nameCtrl = TextEditingController(text: _nameFromPath(path));
+    final wCtrl = TextEditingController(text: '16');
+    final hCtrl = TextEditingController(text: '16');
+    return showDialog<_TilesetImportConfig>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) {
+          final tw = int.tryParse(wCtrl.text) ?? 16;
+          final th = int.tryParse(hCtrl.text) ?? 16;
+          final cols = tw > 0 ? imgW ~/ tw : 0;
+          final rows = th > 0 ? imgH ~/ th : 0;
+          return AlertDialog(
+            backgroundColor: AppColors.dialogBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+              side: const BorderSide(color: AppColors.borderColor),
+            ),
+            title: const Text('Import Tileset',
+                style: TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+            content: SizedBox(
+              width: 280,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Name
+                  const Text('Name', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                  const SizedBox(height: 4),
+                  _dialogField(nameCtrl),
+                  const SizedBox(height: 12),
+                  // Tile size
+                  Row(children: [
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('Tile Width', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                      const SizedBox(height: 4),
+                      _dialogField(wCtrl, onChanged: (_) => setD(() {}), isNumber: true),
+                    ])),
+                    const SizedBox(width: 10),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('Tile Height', style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                      const SizedBox(height: 4),
+                      _dialogField(hCtrl, onChanged: (_) => setD(() {}), isNumber: true),
+                    ])),
+                  ]),
+                  const SizedBox(height: 10),
+                  // Info
+                  Text('Image: ${imgW}×${imgH}px → $cols×$rows tiles',
+                      style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
+              ),
+              TextButton(
+                onPressed: () {
+                  final tw2 = int.tryParse(wCtrl.text) ?? 0;
+                  final th2 = int.tryParse(hCtrl.text) ?? 0;
+                  if (tw2 <= 0 || th2 <= 0) return;
+                  Navigator.pop(ctx, _TilesetImportConfig(
+                    name: nameCtrl.text.trim().isEmpty ? 'Tileset' : nameCtrl.text.trim(),
+                    tileWidth: tw2,
+                    tileHeight: th2,
+                  ));
+                },
+                child: const Text('Import', style: TextStyle(color: AppColors.accent)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _dialogField(TextEditingController ctrl, {void Function(String)? onChanged, bool isNumber = false}) =>
+      TextField(
+        controller: ctrl,
+        onChanged: onChanged,
+        keyboardType: isNumber ? TextInputType.number : TextInputType.text,
+        style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
+        decoration: InputDecoration(
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          filled: true,
+          fillColor: AppColors.surfaceBg,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(5),
+            borderSide: const BorderSide(color: AppColors.borderColor),
+          ),
+        ),
+      );
+
+  String _nameFromPath(String path) {
+    final name = path.split(Platform.pathSeparator).last;
+    final dot = name.lastIndexOf('.');
+    return dot > 0 ? name.substring(0, dot) : name;
+  }
+
+  void _removeTileset(TilesetDef def) {
+    _es.mapData.tilesets.remove(def);
+    // Clear cells that used this tileset across all layers
+    for (final layer in _es.mapData.layers) {
+      for (int y = 0; y < _es.mapData.height; y++) {
+        for (int x = 0; x < _es.mapData.width; x++) {
+          if (layer.cells[y][x]?.tilesetId == def.id) {
+            layer.cells[y][x] = null;
+          }
+        }
       }
     }
-    // Reset selected variant if it's now out of range
-    final count =
-        widget.editorState.spriteCache.tileVariantCount(tile);
-    if (widget.editorState.selectedTileVariant.value >= count) {
-      widget.editorState.selectedTileVariant.value =
-          (count - 1).clamp(0, count);
+    if (_es.selectedBrush.value?.tilesetId == def.id) {
+      _es.selectedBrush.value = null;
     }
-    setState(() {});
+    _es.spriteCache.clearTilesets();
+    // Reload remaining tilesets
+    _es.spriteCache.loadTilesets(_es.mapData.tilesets);
+    _es.notifyMapChanged();
+    setState(() {
+      if (_expandedTilesetId == def.id) _expandedTilesetId = null;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final selected = widget.editorState.selectedTile.value;
-    final selectedVariant = widget.editorState.selectedTileVariant.value;
-    final cache = widget.editorState.spriteCache;
-    final es = widget.editorState;
-    final activeTool = es.activeTool.value;
-
+    final tilesets = _es.mapData.tilesets;
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Tool strip ──────────────────────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-          child: Wrap(
-            spacing: 4,
-            runSpacing: 4,
-            children: [
-              _TileToolBtn(
-                icon: Icons.edit_outlined,
-                tooltip: 'Paint',
-                active: activeTool == EditorTool.tile,
-                onTap: () => es.activeTool.value = EditorTool.tile,
-              ),
-              _TileToolBtn(
-                icon: Icons.format_color_fill,
-                tooltip: 'Flood Fill',
-                active: activeTool == EditorTool.fill,
-                onTap: () => es.activeTool.value = EditorTool.fill,
-              ),
-              _TileToolBtn(
-                icon: Icons.crop_square,
-                tooltip: 'Rectangle Fill',
-                active: activeTool == EditorTool.rect,
-                onTap: () => es.activeTool.value = EditorTool.rect,
-              ),
-              _TileToolBtn(
-                icon: Icons.select_all,
-                tooltip: 'Fill entire map with selected tile',
-                active: false,
-                onTap: _fillAll,
-              ),
-              _TileToolBtn(
-                icon: Icons.delete_sweep_outlined,
-                tooltip: 'Erase entire map',
-                active: false,
-                danger: true,
-                onTap: _eraseAll,
-              ),
-            ],
-          ),
-        ),
-        Container(height: 1, color: AppColors.borderColor),
-        // ── Tile list ───────────────────────────────────────────────────────
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            itemCount: _paintableTiles.length,
-      itemBuilder: (_, i) {
-        final tile = _paintableTiles[i];
-        final isSelected = selected == tile;
-        final variantPaths = cache.getTilePaths(tile);
-        final hasSprites = variantPaths.isNotEmpty;
-
-        return GestureDetector(
-          onTap: () {
-            widget.editorState.selectedTile.value = tile;
-            widget.editorState.selectedTileVariant.value = 0;
-          },
+        // Header
+        GestureDetector(
+          onTap: () => setState(() => _expanded = !_expanded),
           child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? AppColors.accent.withOpacity(0.15)
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: isSelected ? AppColors.accent : Colors.transparent,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Row(
               children: [
-                // Tile row: color/sprite preview + label + add button
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: Row(
-                    children: [
-                      // Preview: first sprite or color swatch
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(3),
-                        child: hasSprites
-                            ? Image.file(File(variantPaths[0]),
-                                width: 18, height: 18, fit: BoxFit.cover)
-                            : Container(
-                                width: 18,
-                                height: 18,
-                                decoration: BoxDecoration(
-                                  color: tile.color,
-                                  borderRadius: BorderRadius.circular(3),
-                                ),
-                              ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          tile.label,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: isSelected
-                                ? AppColors.textPrimary
-                                : AppColors.textSecondary,
-                          ),
-                        ),
-                      ),
-                      // Add variant button
-                      GestureDetector(
-                        onTap: () => _addVariant(tile),
-                        child: const Tooltip(
-                          message: 'Add sprite variant',
-                          child: Icon(Icons.add_photo_alternate_outlined,
-                              size: 14, color: AppColors.textMuted),
-                        ),
-                      ),
-                    ],
+                Icon(_expanded ? Icons.expand_more : Icons.chevron_right,
+                    size: 14, color: AppColors.textMuted),
+                const SizedBox(width: 4),
+                const Text('TILESETS',
+                    style: TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.0)),
+                const Spacer(),
+                GestureDetector(
+                  onTap: _importTileset,
+                  child: const Tooltip(
+                    message: 'Import tileset image',
+                    child: Icon(Icons.add_photo_alternate_outlined,
+                        size: 14, color: AppColors.textMuted),
                   ),
                 ),
-
-                // Variant thumbnails (shown only when sprites exist)
-                if (hasSprites && isSelected)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 10, right: 10, bottom: 8),
-                    child: Wrap(
-                      spacing: 4,
-                      runSpacing: 4,
-                      children: [
-                        for (int v = 0; v < variantPaths.length; v++)
-                          GestureDetector(
-                            onTap: () {
-                              widget.editorState.selectedTileVariant.value = v;
-                            },
-                            onLongPress: () => _removeVariant(tile, v),
-                            child: Stack(
-                              children: [
-                                Container(
-                                  width: 28,
-                                  height: 28,
-                                  decoration: BoxDecoration(
-                                    border: Border.all(
-                                      color: (isSelected && selectedVariant == v)
-                                          ? AppColors.accent
-                                          : AppColors.borderColor,
-                                      width: 2,
-                                    ),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(2),
-                                    child: Image.file(File(variantPaths[v]),
-                                        fit: BoxFit.cover),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
               ],
             ),
           ),
-        );
-      },
-          ),
         ),
+
+        if (_expanded) ...[
+          if (tilesets.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(12, 0, 12, 6),
+              child: Text('No tilesets imported',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
+            )
+          else
+            ...tilesets.map((def) {
+              final isOpen = _expandedTilesetId == def.id;
+              final isActive = _es.selectedBrush.value?.tilesetId == def.id;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Tileset row
+                  GestureDetector(
+                    onTap: () => setState(() {
+                      _expandedTilesetId = isOpen ? null : def.id;
+                    }),
+                    child: Container(
+                      margin: const EdgeInsets.fromLTRB(6, 1, 6, 1),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? AppColors.accent.withOpacity(0.1)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(
+                            color: isActive ? AppColors.accent.withOpacity(0.4) : Colors.transparent),
+                      ),
+                      child: Row(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(2),
+                            child: Image.file(File(def.imagePath),
+                                width: 16, height: 16, fit: BoxFit.cover),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(def.name,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: isActive
+                                            ? AppColors.textPrimary
+                                            : AppColors.textSecondary)),
+                                Text('${def.columns}×${def.rows} tiles, ${def.tileWidth}×${def.tileHeight}px',
+                                    style: const TextStyle(
+                                        fontSize: 10, color: AppColors.textMuted)),
+                              ],
+                            ),
+                          ),
+                          Icon(isOpen ? Icons.expand_more : Icons.chevron_right,
+                              size: 12, color: AppColors.textMuted),
+                          const SizedBox(width: 4),
+                          GestureDetector(
+                            onTap: () => _removeTileset(def),
+                            child: const Tooltip(
+                              message: 'Remove tileset',
+                              child: Icon(Icons.close, size: 12, color: AppColors.textMuted),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Tileset viewer
+                  if (isOpen)
+                    _TilesetViewer(
+                      def: def,
+                      image: _es.spriteCache.getTilesetImage(def.id),
+                      activeBrush: _es.selectedBrush.value?.tilesetId == def.id
+                          ? _es.selectedBrush.value
+                          : null,
+                      onBrushSelected: (brush) {
+                        _es.selectedBrush.value = brush;
+                        _es.activeTool.value = EditorTool.tile;
+                      },
+                    ),
+                ],
+              );
+            }),
+        ],
       ],
     );
   }
+}
+
+class _TilesetImportConfig {
+  final String name;
+  final int tileWidth;
+  final int tileHeight;
+  const _TilesetImportConfig({required this.name, required this.tileWidth, required this.tileHeight});
+}
+
+// ─── Tileset Viewer ───────────────────────────────────────────────────────────
+
+class _TilesetViewer extends StatefulWidget {
+  final TilesetDef def;
+  final ui.Image? image;
+  final TilesetBrush? activeBrush;
+  final void Function(TilesetBrush brush) onBrushSelected;
+
+  const _TilesetViewer({
+    required this.def,
+    required this.image,
+    required this.activeBrush,
+    required this.onBrushSelected,
+  });
+
+  @override
+  State<_TilesetViewer> createState() => _TilesetViewerState();
+}
+
+class _TilesetViewerState extends State<_TilesetViewer> {
+  // Zoom & pan
+  double _zoom = 1.0;
+  Offset _pan = Offset.zero;
+  bool _initDone = false;
+
+  // Drag selection (left button)
+  bool _isSelecting = false;
+  int _selStartCol = 0, _selStartRow = 0;
+  int _selEndCol = 0, _selEndRow = 0;
+
+  // Pan (middle / right button)
+  bool _isPanning = false;
+  Offset _lastPanPos = Offset.zero;
+
+  @override
+  void didUpdateWidget(_TilesetViewer old) {
+    super.didUpdateWidget(old);
+    if (old.def.id != widget.def.id) _initDone = false;
+  }
+
+  void _fitToWidth(double availW) {
+    final naturalW = widget.def.columns * widget.def.tileWidth.toDouble();
+    _zoom = (availW / naturalW).clamp(0.1, 12.0);
+    _pan = Offset.zero;
+    _initDone = true;
+  }
+
+  /// Screen → content coordinate.
+  Offset _toContent(Offset screen) {
+    final d = screen - _pan;
+    return Offset(d.dx / _zoom, d.dy / _zoom);
+  }
+
+  /// Clamp a content position to valid tile indices.
+  (int col, int row) _toTile(Offset content) => (
+        (content.dx / widget.def.tileWidth).floor().clamp(0, widget.def.columns - 1),
+        (content.dy / widget.def.tileHeight).floor().clamp(0, widget.def.rows - 1),
+      );
+
+  void _confirmSelection() {
+    if (!_isSelecting) return;
+    final c1 = _selStartCol < _selEndCol ? _selStartCol : _selEndCol;
+    final c2 = _selStartCol < _selEndCol ? _selEndCol : _selStartCol;
+    final r1 = _selStartRow < _selEndRow ? _selStartRow : _selEndRow;
+    final r2 = _selStartRow < _selEndRow ? _selEndRow : _selStartRow;
+    widget.onBrushSelected(TilesetBrush(
+      tilesetId: widget.def.id,
+      col1: c1, row1: r1,
+      col2: c2, row2: r2,
+    ));
+    setState(() => _isSelecting = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final def = widget.def;
+    final tileW = def.tileWidth.toDouble();
+    final tileH = def.tileHeight.toDouble();
+    final naturalW = def.columns * tileW;
+    final naturalH = def.rows * tileH;
+
+    // Determine which selection rect to draw
+    final brush = widget.activeBrush;
+    int? dc1, dr1, dc2, dr2;
+    if (_isSelecting) {
+      dc1 = _selStartCol < _selEndCol ? _selStartCol : _selEndCol;
+      dc2 = _selStartCol < _selEndCol ? _selEndCol : _selStartCol;
+      dr1 = _selStartRow < _selEndRow ? _selStartRow : _selEndRow;
+      dr2 = _selStartRow < _selEndRow ? _selEndRow : _selStartRow;
+    } else if (brush != null && brush.tilesetId == def.id) {
+      dc1 = brush.col1; dr1 = brush.row1;
+      dc2 = brush.col2; dr2 = brush.row2;
+    }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(6, 0, 6, 4),
+      height: 200,
+      decoration: BoxDecoration(
+        color: const Color(0xFF111111),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: AppColors.borderColor),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: LayoutBuilder(builder: (_, constraints) {
+          if (!_initDone) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) setState(() => _fitToWidth(constraints.maxWidth));
+            });
+          }
+          return Listener(
+            // Scroll = zoom centered on cursor
+            onPointerSignal: (e) {
+              if (e is PointerScrollEvent) {
+                setState(() {
+                  final oldZoom = _zoom;
+                  final factor = e.scrollDelta.dy < 0 ? 1.15 : 0.87;
+                  _zoom = (_zoom * factor).clamp(0.1, 12.0);
+                  // Keep cursor point fixed during zoom
+                  final ratio = _zoom / oldZoom;
+                  final delta = e.localPosition - _pan;
+                  _pan = e.localPosition - Offset(delta.dx * ratio, delta.dy * ratio);
+                });
+              }
+            },
+            // Middle / right button = pan
+            onPointerDown: (e) {
+              if (e.buttons == kMiddleMouseButton || e.buttons == kSecondaryMouseButton) {
+                setState(() { _isPanning = true; _lastPanPos = e.localPosition; });
+              }
+            },
+            onPointerMove: (e) {
+              if (_isPanning) {
+                setState(() {
+                  _pan += e.localPosition - _lastPanPos;
+                  _lastPanPos = e.localPosition;
+                });
+              }
+            },
+            onPointerUp: (_) {
+              if (_isPanning) setState(() => _isPanning = false);
+            },
+            // Left button drag = tile selection
+            child: GestureDetector(
+              onPanStart: (d) {
+                if (_isPanning) return;
+                final tile = _toTile(_toContent(d.localPosition));
+                setState(() {
+                  _isSelecting = true;
+                  _selStartCol = tile.$1; _selStartRow = tile.$2;
+                  _selEndCol = tile.$1;   _selEndRow = tile.$2;
+                });
+              },
+              onPanUpdate: (d) {
+                if (!_isSelecting) return;
+                final tile = _toTile(_toContent(d.localPosition));
+                setState(() { _selEndCol = tile.$1; _selEndRow = tile.$2; });
+              },
+              onPanEnd: (_) => _confirmSelection(),
+              onTapDown: (d) {
+                // Single-tile click
+                final tile = _toTile(_toContent(d.localPosition));
+                widget.onBrushSelected(TilesetBrush(
+                  tilesetId: def.id,
+                  col1: tile.$1, row1: tile.$2,
+                  col2: tile.$1, row2: tile.$2,
+                ));
+              },
+              child: CustomPaint(
+                painter: _TilesetGridPainter(
+                  def: def,
+                  image: widget.image,
+                  zoom: _zoom,
+                  pan: _pan,
+                  selC1: dc1, selR1: dr1,
+                  selC2: dc2, selR2: dr2,
+                  naturalW: naturalW,
+                  naturalH: naturalH,
+                ),
+                size: Size(constraints.maxWidth, 200),
+              ),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
+class _TilesetGridPainter extends CustomPainter {
+  final TilesetDef def;
+  final ui.Image? image;
+  final double zoom;
+  final Offset pan;
+  final int? selC1, selR1, selC2, selR2;
+  final double naturalW, naturalH;
+
+  const _TilesetGridPainter({
+    required this.def,
+    required this.image,
+    required this.zoom,
+    required this.pan,
+    required this.naturalW,
+    required this.naturalH,
+    this.selC1,
+    this.selR1,
+    this.selC2,
+    this.selR2,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.translate(pan.dx, pan.dy);
+    canvas.scale(zoom);
+
+    final tileW = def.tileWidth.toDouble();
+    final tileH = def.tileHeight.toDouble();
+
+    // Background
+    canvas.drawRect(Rect.fromLTWH(0, 0, naturalW, naturalH),
+        Paint()..color = const Color(0xFF2A2A2A));
+
+    // Tileset image
+    if (image != null) {
+      canvas.drawImageRect(
+        image!,
+        Rect.fromLTWH(0, 0, image!.width.toDouble(), image!.height.toDouble()),
+        Rect.fromLTWH(0, 0, naturalW, naturalH),
+        Paint()..filterQuality = FilterQuality.none,
+      );
+    }
+
+    // Grid lines — keep 1px wide regardless of zoom
+    final gridPaint = Paint()
+      ..color = const Color(0x55FFFFFF)
+      ..strokeWidth = 1.0 / zoom
+      ..style = PaintingStyle.stroke;
+    for (int c = 0; c <= def.columns; c++) {
+      canvas.drawLine(Offset(c * tileW, 0), Offset(c * tileW, naturalH), gridPaint);
+    }
+    for (int r = 0; r <= def.rows; r++) {
+      canvas.drawLine(Offset(0, r * tileH), Offset(naturalW, r * tileH), gridPaint);
+    }
+
+    // Selection highlight
+    if (selC1 != null && selR1 != null && selC2 != null && selR2 != null) {
+      final rect = Rect.fromLTWH(
+        selC1! * tileW, selR1! * tileH,
+        (selC2! - selC1! + 1) * tileW,
+        (selR2! - selR1! + 1) * tileH,
+      );
+      canvas.drawRect(rect, Paint()
+        ..color = const Color(0x446C63FF)
+        ..style = PaintingStyle.fill);
+      canvas.drawRect(rect, Paint()
+        ..color = const Color(0xFF6C63FF)
+        ..strokeWidth = 2.0 / zoom
+        ..style = PaintingStyle.stroke);
+    }
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_TilesetGridPainter old) => true;
 }
 
 // ─── Tile Tool Button ─────────────────────────────────────────────────────────

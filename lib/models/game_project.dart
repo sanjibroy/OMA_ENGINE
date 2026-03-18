@@ -29,6 +29,7 @@ class GameProject {
   int viewportWidth;   // virtual viewport W (0 = fullscreen)
   int viewportHeight;  // virtual viewport H (0 = fullscreen)
   bool hudAtBottom; // HUD strip position in the exported game + editor preview
+  bool pixelArt;       // nearest-neighbor filtering (crisp pixels, no blur)
   bool allowZoom;      // whether the player can zoom with scroll wheel in game
   double maxZoom;      // maximum zoom level when allowZoom is true
   bool cameraFollow;   // whether camera follows the player in play mode
@@ -63,6 +64,7 @@ class GameProject {
     this.viewportWidth = 0,
     this.viewportHeight = 0,
     this.hudAtBottom = true,
+    this.pixelArt = true,
     this.allowZoom = false,
     this.maxZoom = 2.0,
     this.cameraFollow = true,
@@ -101,6 +103,7 @@ class GameProject {
         'viewportWidth': viewportWidth,
         'viewportHeight': viewportHeight,
         'hudAtBottom': hudAtBottom,
+        'pixelArt': pixelArt,
         'allowZoom': allowZoom,
         'maxZoom': maxZoom,
         'cameraFollow': cameraFollow,
@@ -128,6 +131,7 @@ class GameProject {
         viewportWidth: j['viewportWidth'] as int? ?? 0,
         viewportHeight: j['viewportHeight'] as int? ?? 0,
         hudAtBottom: j['hudAtBottom'] as bool? ?? true,
+        pixelArt: j['pixelArt'] as bool? ?? true,
         allowZoom: j['allowZoom'] as bool? ?? false,
         maxZoom: (j['maxZoom'] as num?)?.toDouble() ?? 2.0,
         cameraFollow: j['cameraFollow'] as bool? ?? true,

@@ -66,18 +66,6 @@ class ExportService {
       final objMap = <String, String>{
         for (final e in objVariantsMap.entries) e.key: e.value[0]
       };
-      final tileMap = <String, List<String>>{};
-      for (final e in state.spriteCache.tilePaths.entries) {
-        final list = <String>[];
-        for (int i = 0; i < e.value.length; i++) {
-          final p = e.value[i];
-          final ext = p.split('.').last;
-          final rel = 'sprites/tile_${e.key}_$i.$ext';
-          await File(p).copy('$gameDataDir/$rel');
-          list.add(rel);
-        }
-        tileMap[e.key] = list;
-      }
       final animMap = <String, Map<String, List<String>>>{};
       final animFpsMap = <String, Map<String, int>>{};
       final animDefaultsMap = <String, String>{};
@@ -159,7 +147,6 @@ class ExportService {
       allMaps[state.currentMapId] = state.mapData.toJson()
         ..['spritePaths'] = objMap
         ..['objectVariantPaths'] = objVariantsMap
-        ..['tileSpritesPaths'] = tileMap
         ..['animPaths'] = animMap
         ..['animFps'] = animFpsMap
         ..['animDefaults'] = animDefaultsMap
@@ -186,9 +173,6 @@ class ExportService {
             Map<String, dynamic>.from(allMaps[pm.id] ?? {});
         if (mapJson['spritePaths'] == null) mapJson['spritePaths'] = objMap;
         if (mapJson['objectVariantPaths'] == null) mapJson['objectVariantPaths'] = objVariantsMap;
-        if (mapJson['tileSpritesPaths'] == null) {
-          mapJson['tileSpritesPaths'] = tileMap;
-        }
         if (mapJson['animPaths'] == null) mapJson['animPaths'] = animMap;
         if (mapJson['animFps'] == null) mapJson['animFps'] = animFpsMap;
         if (mapJson['animDefaults'] == null) mapJson['animDefaults'] = animDefaultsMap;
@@ -361,18 +345,6 @@ with zipfile.ZipFile(base_apk, 'r') as src:
     final objMap = <String, String>{
       for (final e in objVariantsMap.entries) e.key: e.value[0]
     };
-    final tileMap = <String, List<String>>{};
-    for (final e in state.spriteCache.tilePaths.entries) {
-      final list = <String>[];
-      for (int i = 0; i < e.value.length; i++) {
-        final p = e.value[i];
-        final ext = p.split('.').last;
-        final rel = 'sprites/tile_${e.key}_$i.$ext';
-        data[rel] = await File(p).readAsBytes();
-        list.add(rel);
-      }
-      tileMap[e.key] = list;
-    }
     final animMap = <String, Map<String, List<String>>>{};
     final animFpsMap = <String, Map<String, int>>{};
     final animDefaultsMap = <String, String>{};
@@ -448,7 +420,6 @@ with zipfile.ZipFile(base_apk, 'r') as src:
     allMaps[state.currentMapId] = state.mapData.toJson()
       ..['spritePaths'] = objMap
       ..['objectVariantPaths'] = objVariantsMap
-      ..['tileSpritesPaths'] = tileMap
       ..['animPaths'] = animMap
       ..['animFps'] = animFpsMap
       ..['animDefaults'] = animDefaultsMap
@@ -472,9 +443,6 @@ with zipfile.ZipFile(base_apk, 'r') as src:
       final mapJson =
           Map<String, dynamic>.from(allMaps[pm.id] ?? {});
       if (mapJson['spritePaths'] == null) mapJson['spritePaths'] = objMap;
-      if (mapJson['tileSpritesPaths'] == null) {
-        mapJson['tileSpritesPaths'] = tileMap;
-      }
       if (mapJson['animPaths'] == null) mapJson['animPaths'] = animMap;
       if (mapJson['animFps'] == null) mapJson['animFps'] = animFpsMap;
       if (mapJson['animDefaults'] == null) mapJson['animDefaults'] = animDefaultsMap;

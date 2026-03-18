@@ -1,10 +1,10 @@
 import 'package:flame/game.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../editor/editor_game.dart'; // needed for _ZoomControls type ref
 import '../../editor/editor_state.dart';
 import '../../models/game_object.dart';
-import '../../models/map_data.dart';
 import '../../theme/app_theme.dart';
 
 class CenterCanvas extends StatefulWidget {
@@ -28,8 +28,19 @@ class _CenterCanvasState extends State<CenterCanvas> {
   Offset? _rectCurrent; // current drag pos (for preview)
   bool _lastRectErase = false;
   MouseCursor _cursor = SystemMouseCursors.precise;
+
+  // ─── Select tool state ─────────────────────────────────────────────────────
+  Offset? _selDragStart;      // screen pos where selection drag started
+  Offset? _selDragCurrent;    // current drag pos (for in-progress selection rect)
+  bool _isMovingSelection = false;
+  Offset? _moveDragStart;
+  (int, int)? _moveSelectionOrigin; // tile top-left when move began
+  TileRegionData? _moveSnapshot;
+  (int, int)? _lastMoveTile;  // last tile position during move drag
+  (int, int)? _lastPastePos;  // top-left of currently painted move preview
   GameObject? _draggedObject;      // object currently being dragged
   bool _dragUndoPushed = false;    // undo pushed lazily on first tile change
+  EditorTool? _prePlayTool;        // tool active before entering play mode
 
   // HUD state (updated by game callbacks)
   int _health = 100;
@@ -71,10 +82,12 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _state.activeTool.addListener(_onActiveToolChanged);
     _state.projectChanged.addListener(_onProjectChanged);
     _state.sortEditMode.addListener(_onSortEditModeChanged);
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _state.isPlayMode.removeListener(_onPlayModeChanged);
     _state.showGrid.removeListener(_onShowGridChanged);
     _state.activeTool.removeListener(_onActiveToolChanged);
@@ -96,6 +109,15 @@ class _CenterCanvasState extends State<CenterCanvas> {
 
   void _onActiveToolChanged() {
     _game.setShowCollision(_state.activeTool.value == EditorTool.collision);
+    if (_state.activeTool.value != EditorTool.select) {
+      _state.selectedMapRegion.value = null;
+      setState(() {
+        _selDragStart = null;
+        _selDragCurrent = null;
+        _isMovingSelection = false;
+        _moveSnapshot = null;
+      });
+    }
   }
 
   void _onSortEditModeChanged() {
@@ -105,6 +127,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
 
   void _onPlayModeChanged() {
     if (_state.isPlayMode.value) {
+      _prePlayTool = _state.activeTool.value;
       _state.sortEditMode.value = false;
       setState(() {
         _health = 100;
@@ -121,12 +144,14 @@ class _CenterCanvasState extends State<CenterCanvas> {
       _game.allowGameZoom = _state.project.allowZoom;
       _game.gameMaxZoom = _state.project.maxZoom;
       _game.allowCameraFollow = _state.project.cameraFollow;
+      _game.setPixelArt(_state.project.pixelArt);
       _game.startPlay(
         viewportWidth: _state.project.viewportWidth,
         viewportHeight: _state.project.viewportHeight,
         effects: _state.project.effects,
         items: _state.project.items,
         keyBindings: _state.project.keyBindings,
+        playerSpeed: _state.project.playerSpeed,
       );
       // Delay so panel rebuilds finish before we steal focus
       Future.delayed(const Duration(milliseconds: 100), () {
@@ -139,8 +164,9 @@ class _CenterCanvasState extends State<CenterCanvas> {
       // instances, so selectedObject would point to a dead reference.
       _state.selectedObject.value = null;
       _game.setSelectedObject(null);
-      // Reset to object tool so mouse doesn't accidentally paint tiles.
-      _state.activeTool.value = EditorTool.object;
+      // Restore the tool that was active before entering play mode.
+      _state.activeTool.value = _prePlayTool ?? EditorTool.tile;
+      _prePlayTool = null;
       _game.setShowCollision(false);
       setState(() {
         _cursor = SystemMouseCursors.precise;
@@ -221,6 +247,54 @@ class _CenterCanvasState extends State<CenterCanvas> {
     });
   }
 
+  // ─── Select tool helpers ───────────────────────────────────────────────────
+
+  bool _isTileInSelection(int tx, int ty) {
+    final sel = _state.selectedMapRegion.value;
+    if (sel == null) return false;
+    return tx >= sel.$1 && tx <= sel.$3 && ty >= sel.$2 && ty <= sel.$4;
+  }
+
+  void _clearSelection() {
+    _state.selectedMapRegion.value = null;
+    setState(() {
+      _selDragStart = null;
+      _selDragCurrent = null;
+      _isMovingSelection = false;
+      _moveDragStart = null;
+      _moveSelectionOrigin = null;
+      _moveSnapshot = null;
+      _lastMoveTile = null;
+      _lastPastePos = null;
+    });
+  }
+
+  void _deleteSelection() {
+    final sel = _state.selectedMapRegion.value;
+    if (sel == null) return;
+    _state.pushUndo();
+    _game.eraseRegion(sel.$1, sel.$2, sel.$3, sel.$4,
+        layerIndex: _state.activeLayerIndex.value);
+    _state.notifyMapChanged();
+    _clearSelection();
+  }
+
+  bool _onHardwareKey(KeyEvent event) {
+    if (_state.isPlayMode.value) return false;
+    if (_state.activeTool.value != EditorTool.select) return false;
+    if (event is! KeyDownEvent) return false;
+    if (event.logicalKey == LogicalKeyboardKey.delete ||
+        event.logicalKey == LogicalKeyboardKey.backspace) {
+      _deleteSelection();
+      return true;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      _clearSelection();
+      return true;
+    }
+    return false;
+  }
+
   void _onPointerDown(PointerDownEvent e) {
     if (_state.isPlayMode.value) {
       _gameFocusNode.requestFocus(); // ensure keys work after clicking canvas
@@ -236,26 +310,45 @@ class _CenterCanvasState extends State<CenterCanvas> {
     final tool = _state.activeTool.value;
 
     if (tool == EditorTool.tile) {
+      final brush = _state.selectedBrush.value;
       if (e.buttons == kPrimaryMouseButton) {
         _state.pushUndo();
         _isPainting = true;
-        _game.paintTile(e.localPosition, _state.selectedTile.value,
-            variant: _state.selectedTileVariant.value);
+        if (brush != null) {
+          _game.paintTilesetBrush(e.localPosition, brush,
+              layerIndex: _state.activeLayerIndex.value);
+        } else {
+          _game.paintTile(e.localPosition, _state.selectedPaintColor.value,
+              layerIndex: _state.activeLayerIndex.value);
+        }
       } else if (e.buttons == kSecondaryMouseButton) {
         _state.pushUndo();
         _isErasing = true;
-        _game.paintTile(e.localPosition, TileType.empty);
+        _game.eraseTile(e.localPosition, layerIndex: _state.activeLayerIndex.value);
       }
     } else if (tool == EditorTool.fill) {
+      final brush = _state.selectedBrush.value;
       if (e.buttons == kPrimaryMouseButton) {
         _state.pushUndo();
-        _game.floodFill(e.localPosition, _state.selectedTile.value,
-            variant: _state.selectedTileVariant.value);
+        if (brush != null) {
+          _game.floodFillTileset(e.localPosition, brush,
+              layerIndex: _state.activeLayerIndex.value);
+        } else {
+          _game.floodFill(e.localPosition, _state.selectedPaintColor.value,
+              layerIndex: _state.activeLayerIndex.value);
+        }
         _state.notifyMapChanged();
       } else if (e.buttons == kSecondaryMouseButton) {
         _state.pushUndo();
-        _game.floodFill(e.localPosition, TileType.empty);
+        _game.floodFill(e.localPosition, const Color(0x00000000),
+            layerIndex: _state.activeLayerIndex.value);
         _state.notifyMapChanged();
+      }
+    } else if (tool == EditorTool.erase) {
+      if (e.buttons == kPrimaryMouseButton) {
+        _state.pushUndo();
+        _isErasing = true;
+        _game.eraseTile(e.localPosition, layerIndex: _state.activeLayerIndex.value);
       }
     } else if (tool == EditorTool.rect) {
       if (e.buttons == kPrimaryMouseButton) {
@@ -273,6 +366,39 @@ class _CenterCanvasState extends State<CenterCanvas> {
         _game.toggleCollision(e.localPosition, leftButton: false);
       }
       _state.notifyMapChanged();
+    } else if (tool == EditorTool.select) {
+      if (e.buttons == kPrimaryMouseButton) {
+        final tile = _game.screenToTile(e.localPosition);
+        final sel = _state.selectedMapRegion.value;
+        if (tile != null && sel != null && _isTileInSelection(tile.$1, tile.$2)) {
+          // Begin moving the existing selection
+          _isMovingSelection = true;
+          _moveDragStart = e.localPosition;
+          _moveSelectionOrigin = (sel.$1, sel.$2);
+          _lastMoveTile = tile;
+          _state.pushUndo();
+          final li = _state.activeLayerIndex.value;
+          _moveSnapshot = _game.copyRegion(sel.$1, sel.$2, sel.$3, sel.$4, layerIndex: li);
+          // Erase original, paste at same spot so it looks unchanged
+          _game.eraseRegion(sel.$1, sel.$2, sel.$3, sel.$4, layerIndex: li);
+          _game.pasteRegion(_moveSnapshot!, sel.$1, sel.$2);
+          _lastPastePos = (sel.$1, sel.$2);
+          _state.notifyMapChanged();
+        } else {
+          // Start a new marquee selection
+          _isMovingSelection = false;
+          _moveSnapshot = null;
+          _lastMoveTile = null;
+          _lastPastePos = null;
+          _state.selectedMapRegion.value = null;
+          setState(() {
+            _selDragStart = e.localPosition;
+            _selDragCurrent = e.localPosition;
+          });
+        }
+      } else if (e.buttons == kSecondaryMouseButton) {
+        _clearSelection();
+      }
     } else {
       // object tool
       if (_state.sortEditMode.value) {
@@ -325,15 +451,61 @@ class _CenterCanvasState extends State<CenterCanvas> {
       _game.pan(-delta);
     }
     if (_isPainting) {
-      _game.paintTile(e.localPosition, _state.selectedTile.value,
-          variant: _state.selectedTileVariant.value);
+      final brush = _state.selectedBrush.value;
+      if (brush != null) {
+        _game.paintTilesetBrush(e.localPosition, brush,
+            layerIndex: _state.activeLayerIndex.value);
+      } else {
+        _game.paintTile(e.localPosition, _state.selectedPaintColor.value,
+            layerIndex: _state.activeLayerIndex.value);
+      }
     }
     if (_isErasing) {
-      _game.paintTile(e.localPosition, TileType.empty);
+      _game.eraseTile(e.localPosition, layerIndex: _state.activeLayerIndex.value);
     }
     if (_rectStart != null) {
       setState(() => _rectCurrent = e.localPosition);
     }
+    // Select tool — drag new selection or move existing
+    if (_state.activeTool.value == EditorTool.select) {
+      if (_isMovingSelection && _moveSnapshot != null) {
+        final curTile = _game.screenToTile(e.localPosition);
+        final startTile = _moveDragStart != null ? _game.screenToTile(_moveDragStart!) : null;
+        if (curTile != null && startTile != null &&
+            _moveSelectionOrigin != null && curTile != _lastMoveTile) {
+          _lastMoveTile = curTile;
+          final dx = curTile.$1 - startTile.$1;
+          final dy = curTile.$2 - startTile.$2;
+          final newX = _moveSelectionOrigin!.$1 + dx;
+          final newY = _moveSelectionOrigin!.$2 + dy;
+          final w = _moveSnapshot!.width;
+          final h = _moveSnapshot!.height;
+          // Erase previous preview, paste at new position
+          final li = _moveSnapshot!.layerIndex;
+          if (_lastPastePos != null) {
+            _game.eraseRegion(_lastPastePos!.$1, _lastPastePos!.$2,
+                _lastPastePos!.$1 + w - 1, _lastPastePos!.$2 + h - 1,
+                layerIndex: li);
+          }
+          _game.pasteRegion(_moveSnapshot!, newX, newY);
+          _lastPastePos = (newX, newY);
+          _state.selectedMapRegion.value = (newX, newY, newX + w - 1, newY + h - 1);
+          _state.notifyMapChanged();
+        }
+      } else if (_selDragStart != null) {
+        setState(() => _selDragCurrent = e.localPosition);
+        final a = _game.screenToTile(_selDragStart!);
+        final b = _game.screenToTile(e.localPosition);
+        if (a != null && b != null) {
+          final x1 = a.$1 < b.$1 ? a.$1 : b.$1;
+          final y1 = a.$2 < b.$2 ? a.$2 : b.$2;
+          final x2 = a.$1 < b.$1 ? b.$1 : a.$1;
+          final y2 = a.$2 < b.$2 ? b.$2 : a.$2;
+          _state.selectedMapRegion.value = (x1, y1, x2, y2);
+        }
+      }
+    }
+
     // Drag selected object to new tile
     if (_draggedObject != null) {
       final tile = _game.screenToTile(e.localPosition);
@@ -361,6 +533,12 @@ class _CenterCanvasState extends State<CenterCanvas> {
       next = (_draggedObject != null || _game.objectAt(pos) != null)
           ? SystemMouseCursors.move
           : SystemMouseCursors.click;
+    } else if (tool == EditorTool.select) {
+      final tile = _game.screenToTile(pos);
+      final inSel = tile != null && _isTileInSelection(tile.$1, tile.$2);
+      next = (_isMovingSelection || inSel)
+          ? SystemMouseCursors.move
+          : SystemMouseCursors.precise;
     } else {
       next = SystemMouseCursors.precise;
     }
@@ -368,13 +546,45 @@ class _CenterCanvasState extends State<CenterCanvas> {
   }
 
   void _onPointerUp(PointerUpEvent e) {
+    if (_state.activeTool.value == EditorTool.select) {
+      if (_isMovingSelection) {
+        // Move committed — just clear transient state
+        _isMovingSelection = false;
+        _moveDragStart = null;
+        _moveSelectionOrigin = null;
+        _moveSnapshot = null;
+        _lastMoveTile = null;
+        _lastPastePos = null;
+      } else if (_selDragStart != null) {
+        // Finalise marquee selection
+        final a = _game.screenToTile(_selDragStart!);
+        final b = _game.screenToTile(e.localPosition);
+        if (a != null && b != null) {
+          final x1 = a.$1 < b.$1 ? a.$1 : b.$1;
+          final y1 = a.$2 < b.$2 ? a.$2 : b.$2;
+          final x2 = a.$1 < b.$1 ? b.$1 : a.$1;
+          final y2 = a.$2 < b.$2 ? b.$2 : a.$2;
+          _state.selectedMapRegion.value = (x1, y1, x2, y2);
+        } else {
+          _state.selectedMapRegion.value = null;
+        }
+        setState(() { _selDragStart = null; _selDragCurrent = null; });
+      }
+    }
     if (_rectStart != null && _state.activeTool.value == EditorTool.rect) {
       _state.pushUndo();
       if (_lastRectErase) {
-        _game.fillRect(_rectStart!, e.localPosition, TileType.empty);
+        _game.fillRect(_rectStart!, e.localPosition, const Color(0x00000000),
+            layerIndex: _state.activeLayerIndex.value);
       } else {
-        _game.fillRect(_rectStart!, e.localPosition, _state.selectedTile.value,
-            variant: _state.selectedTileVariant.value);
+        final brush = _state.selectedBrush.value;
+        if (brush != null) {
+          _game.fillRectTileset(_rectStart!, e.localPosition, brush,
+              layerIndex: _state.activeLayerIndex.value);
+        } else {
+          _game.fillRect(_rectStart!, e.localPosition, _state.selectedPaintColor.value,
+              layerIndex: _state.activeLayerIndex.value);
+        }
       }
       _state.notifyMapChanged();
       setState(() {
@@ -395,6 +605,8 @@ class _CenterCanvasState extends State<CenterCanvas> {
     setState(() {
       _rectStart = null;
       _rectCurrent = null;
+      _selDragStart = null;
+      _selDragCurrent = null;
     });
     _state.hoverTile.value = null;
   }
@@ -602,6 +814,25 @@ class _CenterCanvasState extends State<CenterCanvas> {
                                 ),
                               ),
                             ),
+                          ),
+
+                        // ── Select tool overlay ───────────────
+                        if (!isPlay)
+                          ValueListenableBuilder<(int, int, int, int)?>(
+                            valueListenable: _state.selectedMapRegion,
+                            builder: (_, sel, __) {
+                              if (sel == null) return const SizedBox.shrink();
+                              return Positioned.fill(
+                                child: IgnorePointer(
+                                  child: CustomPaint(
+                                    painter: _SelectionOverlayPainter(
+                                      game: _game,
+                                      selection: sel,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
                           ),
 
                         // ── Editor zoom controls ──────────────
@@ -818,6 +1049,88 @@ class _ZoomControlsState extends State<_ZoomControls> {
           child: Icon(icon, size: 14, color: AppColors.textSecondary),
         ),
       );
+}
+
+// ─── Selection Overlay Painter ────────────────────────────────────────────────
+
+class _SelectionOverlayPainter extends CustomPainter {
+  final EditorGame game;
+  final (int, int, int, int) selection; // x1,y1,x2,y2 (inclusive)
+
+  const _SelectionOverlayPainter({required this.game, required this.selection});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final (x1, y1, x2, y2) = selection;
+    final topLeft = game.tileToScreen(x1, y1);
+    final bottomRight = game.tileToScreen(x2 + 1, y2 + 1);
+    if (topLeft == null || bottomRight == null) return;
+
+    final rect = Rect.fromPoints(topLeft, bottomRight);
+
+    // Tinted fill
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..color = const Color(0xFF60A5FA).withOpacity(0.1)
+        ..style = PaintingStyle.fill,
+    );
+
+    // Dashed border
+    final borderPaint = Paint()
+      ..color = const Color(0xFF60A5FA)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawPath(_dashedRectPath(rect), borderPaint);
+
+    // Corner handles
+    final handlePaint = Paint()
+      ..color = const Color(0xFF60A5FA)
+      ..style = PaintingStyle.fill;
+    const r = 3.5;
+    for (final pt in [
+      topLeft,
+      Offset(bottomRight.dx, topLeft.dy),
+      bottomRight,
+      Offset(topLeft.dx, bottomRight.dy),
+    ]) {
+      canvas.drawCircle(pt, r, handlePaint);
+    }
+  }
+
+  Path _dashedRectPath(Rect rect) {
+    const dash = 6.0;
+    const gap = 4.0;
+    final path = Path();
+
+    void addDashed(Offset from, Offset to) {
+      final d = (to - from).distance;
+      if (d == 0) return;
+      final dx = (to.dx - from.dx) / d;
+      final dy = (to.dy - from.dy) / d;
+      double pos = 0;
+      bool draw = true;
+      while (pos < d) {
+        final end = (pos + (draw ? dash : gap)).clamp(0.0, d);
+        if (draw) {
+          path.moveTo(from.dx + dx * pos, from.dy + dy * pos);
+          path.lineTo(from.dx + dx * end, from.dy + dy * end);
+        }
+        pos = end;
+        draw = !draw;
+      }
+    }
+
+    addDashed(rect.topLeft, rect.topRight);
+    addDashed(rect.topRight, rect.bottomRight);
+    addDashed(rect.bottomRight, rect.bottomLeft);
+    addDashed(rect.bottomLeft, rect.topLeft);
+    return path;
+  }
+
+  @override
+  bool shouldRepaint(_SelectionOverlayPainter old) =>
+      old.selection != selection;
 }
 
 // ─── Rectangle Fill Preview Painter ──────────────────────────────────────────
