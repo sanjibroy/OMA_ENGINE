@@ -59,6 +59,7 @@ class EditorState {
   final Map<GameObjectType, int> selectedVariantIndex = {};
   final ValueNotifier<GameObject?> selectedObject;
   final ValueNotifier<EditorTool> activeTool;
+  //EditorTool toolBeforeCollision = EditorTool.tile;
   final ValueNotifier<(int, int)?> hoverTile;
   final ValueNotifier<int> mapChanged;
   final ValueNotifier<int> projectChanged; // rebuilds map list UI
@@ -75,6 +76,9 @@ class EditorState {
   // ─── Map tile selection ────────────────────────────────────────────────────
   /// Normalized tile-coord selection rect: (x1, y1, x2, y2) inclusive.
   final ValueNotifier<(int, int, int, int)?> selectedMapRegion;
+
+  
+  
 
   String get currentMapId => _currentMapId;
 

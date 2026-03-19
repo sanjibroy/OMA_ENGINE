@@ -27,6 +27,34 @@ class _LeftPanelState extends State<LeftPanel> {
   int _selectedTab = 0;
 
   @override
+  void initState(){
+    super.initState();
+    widget.editorState.activeTool.addListener(_onToolChanged);
+  }
+
+  @override
+  void dispose(){
+    widget.editorState.activeTool.removeListener(_onToolChanged);
+    super.dispose();
+  }
+
+  void _onToolChanged(){
+    final tool = widget.editorState.activeTool.value;
+    // When exiting collision, resync activeTool to match current visible tab
+    if(tool != EditorTool.collision){
+      final correctTool = _selectedTab == 1 ? EditorTool.object : EditorTool.tile;
+      if(tool!=correctTool){
+        // Tab and tool are out of sync — fix the tool to match the tab
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            widget.editorState.activeTool.value = correctTool;
+          }
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       width: widget.width,
@@ -43,11 +71,11 @@ class _LeftPanelState extends State<LeftPanel> {
             onTap: (i) {
               setState(() => _selectedTab = i);
               // Don't override collision tool when switching palette tabs
-              final inCollision = widget.editorState.activeTool.value == EditorTool.collision;
-              if (!inCollision) {
+              //final inCollision = widget.editorState.activeTool.value == EditorTool.collision;
+              //if (!inCollision) {
                 if (i == 0) widget.editorState.activeTool.value = EditorTool.tile;
                 if (i == 1) widget.editorState.activeTool.value = EditorTool.object;
-              }
+              //}
               // Audio tab: leave activeTool unchanged
             },
           ),
@@ -1062,7 +1090,12 @@ class _TilesetsSectionState extends State<_TilesetsSection> {
                           : null,
                       onBrushSelected: (brush) {
                         _es.selectedBrush.value = brush;
-                        _es.activeTool.value = EditorTool.tile;
+                        
+                        final current = _es.activeTool.value;
+                        if (current != EditorTool.object && current != EditorTool.collision) {
+                          _es.activeTool.value = EditorTool.tile;
+                        }
+
                       },
                     ),
                 ],
