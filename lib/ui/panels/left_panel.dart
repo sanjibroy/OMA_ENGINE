@@ -750,10 +750,11 @@ class _LayersSectionState extends State<_LayersSection> {
                     ),
                   const SizedBox(width: 2),
                   // Context menu
-                  GestureDetector(
-                    onTap: () => _showLayerMenu(context, idx),
-                    child: const Icon(Icons.more_vert,
-                        size: 12, color: AppColors.textMuted),
+                  Builder(
+                    builder: (btnContext) => GestureDetector(
+                      onTap: () => _showLayerMenu(btnContext, idx),
+                      child: const Icon(Icons.more_vert, size: 12, color: AppColors.textMuted),
+                    ),
                   ),
                 ],
               ),
@@ -767,6 +768,10 @@ class _LayersSectionState extends State<_LayersSection> {
   }
 
   void _showLayerMenu(BuildContext context, int index) {
+    final renderBox = context.findRenderObject() as RenderBox;
+    final offset = renderBox.localToGlobal(Offset.zero);
+    final size = renderBox.size;
+
     showMenu<String>(
       context: context,
       color: AppColors.dialogBg,
@@ -774,7 +779,12 @@ class _LayersSectionState extends State<_LayersSection> {
         borderRadius: BorderRadius.circular(8),
         side: const BorderSide(color: AppColors.borderColor),
       ),
-      position: RelativeRect.fill,
+      position: RelativeRect.fromLTRB(
+        offset.dx, 
+        offset.dy + size.height, 
+        offset.dx + size.width, 
+        offset.dy
+        ),
       items: [
         const PopupMenuItem(
           value: 'rename',
