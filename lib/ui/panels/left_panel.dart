@@ -38,20 +38,37 @@ class _LeftPanelState extends State<LeftPanel> {
     super.dispose();
   }
 
-  void _onToolChanged(){
+  void _onToolChanged() {
     final tool = widget.editorState.activeTool.value;
-    // When exiting collision, resync activeTool to match current visible tab
-    if(tool != EditorTool.collision){
-      final correctTool = _selectedTab == 1 ? EditorTool.object : EditorTool.tile;
-      if(tool!=correctTool){
-        // Tab and tool are out of sync — fix the tool to match the tab
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            widget.editorState.activeTool.value = correctTool;
-          }
-        });
-      }
+    // Only resync when exiting collision mode
+    if (tool == EditorTool.collision) return;
+    
+    // Only correct if the tool doesn't match the tab at all
+    // (tile-family tools are all valid on tab 0)
+    final tileTools = {
+      EditorTool.tile,
+      EditorTool.fill,
+      EditorTool.rect,
+      EditorTool.erase,
+      EditorTool.select,
+    };
+    
+    if (_selectedTab == 1 && tileTools.contains(tool)) {
+      // On objects tab but a tile tool got set — fix to object
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          widget.editorState.activeTool.value = EditorTool.object;
+        }
+      });
+    } else if (_selectedTab == 0 && tool == EditorTool.object) {
+      // On tiles tab but object tool got set — fix to tile
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          widget.editorState.activeTool.value = EditorTool.tile;
+        }
+      });
     }
+    // Any tile-family tool on tab 0 = fine, leave it alone
   }
 
   @override
