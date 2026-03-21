@@ -164,6 +164,9 @@ class _Enemy {
 // ─── Play Session (plain Dart class — no Flame Component lifecycle) ────────────
 
 class PlaySession {
+  final Map<String, String> _forcedAnims = {};
+  String _playerForcedAnim = '';
+
   final MapData mapData;
   final SpriteCache spriteCache;
   final List<GameRule> rules;
@@ -175,6 +178,7 @@ class PlaySession {
   final void Function(String msg) onMessage;
   final void Function(String event) onGameEvent;
   final void Function(String? name)? onEquippedItemChanged;
+  
 
   bool debugCollision = false;
 
@@ -241,6 +245,12 @@ class PlaySession {
   int get health => _health;
   int get score => _score;
 
+  bool _prevUp    = false;
+  bool _prevDown  = false;
+  bool _prevLeft  = false;
+  bool _prevRight = false;
+  bool _prevSpace = false;
+
   PlaySession({
     required this.mapData,
     required this.spriteCache,
@@ -261,6 +271,14 @@ class PlaySession {
     final id = keyBindings[t.name];
     if (id == null || id.isEmpty) return null;
     return _kKeyMap[id];
+  }
+
+  void _setForcedAnim(String objectId, String animName) {
+    _forcedAnims[objectId] = animName;
+  }
+
+  void _clearForcedAnim(String objectId) {
+    _forcedAnims.remove(objectId);
   }
 
   static const Map<String, LogicalKeyboardKey> _kKeyMap = {
@@ -620,6 +638,21 @@ class PlaySession {
         _movePlayer(dx / len * spd, dy / len * spd);
       }
     }
+
+    // Fire key-released triggers (falling edge detection)
+    if (!up    && _prevUp)    _fireInstant(TriggerType.keyUpReleased);
+    if (!down  && _prevDown)  _fireInstant(TriggerType.keyDownReleased);
+    if (!left  && _prevLeft)  _fireInstant(TriggerType.keyLeftReleased);
+    if (!right && _prevRight) _fireInstant(TriggerType.keyRightReleased);
+    if (!space && _prevSpace) _fireInstant(TriggerType.keySpaceReleased);
+
+    // Save state for next frame
+    _prevUp    = up;
+    _prevDown  = down;
+    _prevLeft  = left;
+    _prevRight = right;
+    _prevSpace = space;
+
   }
 
   // ─── Collision ────────────────────────────────────────────────────────────
@@ -1137,6 +1170,14 @@ class PlaySession {
       anyFired = true;
     }
     if (anyFired) _cooldowns[key] = _hitCooldown;
+  } 
+
+
+  void _fireInstant(TriggerType trigger, {GameObject? triggerObj}) {
+    for (final rule in rules.where((r) => r.enabled && r.trigger == trigger)) {
+      if (!_evalConditions(rule)) continue;
+      _executeActions(rule.actions, triggerObj: triggerObj);
+    }
   }
 
   /// Evaluates secondary conditions (index 1+) with AND/OR/NOT logic.
@@ -1168,6 +1209,22 @@ class PlaySession {
         keys.contains(LogicalKeyboardKey.arrowRight) || keys.contains(_boundKey(TriggerType.keyRightPressed) ?? LogicalKeyboardKey.keyD),
       TriggerType.keySpacePressed =>
         keys.contains(_boundKey(TriggerType.keySpacePressed) ?? LogicalKeyboardKey.space),
+
+      TriggerType.keyUpReleased =>
+        !keys.contains(LogicalKeyboardKey.arrowUp) &&
+        !keys.contains(_boundKey(TriggerType.keyUpPressed) ?? LogicalKeyboardKey.keyW),
+      TriggerType.keyDownReleased =>
+        !keys.contains(LogicalKeyboardKey.arrowDown) &&
+        !keys.contains(_boundKey(TriggerType.keyDownPressed) ?? LogicalKeyboardKey.keyS),
+      TriggerType.keyLeftReleased =>
+        !keys.contains(LogicalKeyboardKey.arrowLeft) &&
+        !keys.contains(_boundKey(TriggerType.keyLeftPressed) ?? LogicalKeyboardKey.keyA),
+      TriggerType.keyRightReleased =>
+        !keys.contains(LogicalKeyboardKey.arrowRight) &&
+        !keys.contains(_boundKey(TriggerType.keyRightPressed) ?? LogicalKeyboardKey.keyD),
+      TriggerType.keySpaceReleased =>
+        !keys.contains(_boundKey(TriggerType.keySpacePressed) ?? LogicalKeyboardKey.space),
+
       TriggerType.playerHealthZero => _health <= 0,
       TriggerType.enemyNearPlayer =>
         _enemies.any((e) => !e.hidden && (e.pos - _playerPos).length < ts * 5),
@@ -1623,6 +1680,41 @@ class PlaySession {
           for (final pos in positions) {
             _spawnEffect(fxDef, pos.$1, pos.$2);
           }
+        case ActionType.playAnimation:
+          final target = a.params['target'] as String? ?? 'player';
+          final animName = a.params['animName'] as String? ?? '';
+          if (animName.isEmpty) break;
+          if (target == 'player') {
+            _playerForcedAnim = animName;
+          } else if (target == 'trigger' && triggerObj != null) {
+            _setForcedAnim(triggerObj.id, animName);
+          } else if (target == 'named') {
+            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+            if (obj != null) _setForcedAnim(obj.id, animName);
+          } else if (target == 'tag') {
+            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+              _setForcedAnim(obj.id, animName);
+            }
+          } else if (target == 'enemies') {
+            for (final e in _enemies) _setForcedAnim(e.source.id, animName);
+          }
+
+      case ActionType.stopAnimation:
+        final target = a.params['target'] as String? ?? 'player';
+        if (target == 'player') {
+          _playerForcedAnim = '';
+        } else if (target == 'trigger' && triggerObj != null) {
+          _clearForcedAnim(triggerObj.id);
+        } else if (target == 'named') {
+          final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+          if (obj != null) _clearForcedAnim(obj.id);
+        } else if (target == 'tag') {
+          for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+            _clearForcedAnim(obj.id);
+          }
+        } else if (target == 'enemies') {
+          for (final e in _enemies) _clearForcedAnim(e.source.id);
+        }
         default:
           break;
       }
@@ -1717,6 +1809,7 @@ class PlaySession {
             flipH: obj.flipH, flipV: obj.flipV,
             scale: obj.scale, rotation: obj.rotation, alpha: alpha,
             variantIndex: obj.variantIndex,
+            forcedAnim: _forcedAnims[obj.id],
             useAnimation: mapData.getVariantUseAnimation(obj.type, obj.variantIndex)),
       ));
     }
@@ -1737,6 +1830,7 @@ class PlaySession {
             flipH: e.source.flipH, flipV: e.source.flipV,
             scale: e.source.scale, rotation: e.source.rotation, alpha: e.alpha,
             variantIndex: e.source.variantIndex,
+            forcedAnim: _forcedAnims[e.source.id],
             useAnimation: mapData.getVariantUseAnimation(e.source.type, e.source.variantIndex)),
       ));
     }
@@ -1756,10 +1850,15 @@ class PlaySession {
         zOrder: playerZOrder,
         worldY: _playerPos.y,
         draw: () {
-          final playerSprite = _resolveSprite(GameObjectType.playerSpawn,
+          /* final playerSprite = _resolveSprite(GameObjectType.playerSpawn,
               variantIndex: spawn?.variantIndex ?? 0,
               useAnimation: mapData.getVariantUseAnimation(
-                  GameObjectType.playerSpawn, spawn?.variantIndex ?? 0));
+                  GameObjectType.playerSpawn, spawn?.variantIndex ?? 0)); */
+          final playerSprite = _resolveSprite(GameObjectType.playerSpawn,
+            variantIndex: spawn?.variantIndex ?? 0,
+            useAnimation: spawn?.useAnimation ?? false,
+            forcedAnim: _playerForcedAnim.isNotEmpty ? _playerForcedAnim : null);
+
           if (playerSprite != null) {
             _drawSprite(canvas, playerSprite, playerDrawX, playerDrawY, ts,
                 flipH: _playerFlipH, flipV: _playerFlipV,
@@ -2038,8 +2137,8 @@ class PlaySession {
   void _drawObject(Canvas canvas, Offset center, double ts, double r, GameObjectType type,
       {bool flipH = false, bool flipV = false,
       double scale = 1.0, double rotation = 0.0, double alpha = 1.0,
-      int variantIndex = 0, bool useAnimation = false}) {
-    final sprite = _resolveSprite(type, variantIndex: variantIndex, useAnimation: useAnimation);
+      int variantIndex = 0, bool useAnimation = false,String? forcedAnim}) {
+    final sprite = _resolveSprite(type, variantIndex: variantIndex, useAnimation: useAnimation,forcedAnim: forcedAnim);
     if (sprite != null) {
       _drawSprite(canvas, sprite, center.dx, center.dy, ts,
           flipH: flipH, flipV: flipV, scale: scale, rotation: rotation, alpha: alpha);
@@ -2048,7 +2147,7 @@ class PlaySession {
     }
   }
 
-  ui.Image? _resolveSprite(GameObjectType type, {int variantIndex = 0, bool useAnimation = false}) {
+  /*ui.Image? _resolveSprite(GameObjectType type, {int variantIndex = 0, bool useAnimation = false}) {
     // Animated frame
     if (useAnimation && spriteCache.isAnimated(type, variantIndex)) {
       final animName = spriteCache.defaultAnim(type, variantIndex);
@@ -2072,7 +2171,43 @@ class PlaySession {
       }
     }
     return null;
+  }*/
+
+  ui.Image? _resolveSprite(GameObjectType type,
+    {int variantIndex = 0,
+    bool useAnimation = false,
+    String? forcedAnim}) {
+
+      // TEMP DEBUG
+    if (type == GameObjectType.playerSpawn) {
+      print('=== _resolveSprite ===');
+      print('useAnimation: $useAnimation');
+      print('forcedAnim: $forcedAnim');
+      print('isAnimated: ${spriteCache.isAnimated(type, variantIndex)}');
+      print('defaultAnim: ${spriteCache.defaultAnim(type, variantIndex)}');
+      print('animNames: ${spriteCache.animNames(type, variantIndex)}');
+      print('variantIndex: $variantIndex');
+    }
+
+  // Use forced anim if set
+  final animName = forcedAnim?.isNotEmpty == true
+      ? forcedAnim!
+      : spriteCache.isAnimated(type, variantIndex)  // ← ignore useAnimation flag
+        ? spriteCache.defaultAnim(type, variantIndex)
+        : '';
+
+  if (animName.isNotEmpty) {
+    final fps = spriteCache.getAnimFps(type, variantIndex, animName);
+    final frameCount = spriteCache.animFrameCount(type, variantIndex, animName);
+    if (frameCount > 0) {
+      final frameIndex = (_elapsedSec * fps).floor() % frameCount;
+      return spriteCache.getAnimFrame(type, variantIndex, animName, frameIndex);
+    }
   }
+
+  // Fallback to static sprite
+  return spriteCache.getVariantImage(type, variantIndex);
+}
 
   void _drawSprite(Canvas canvas, ui.Image image, double cx, double cy, double ts,
       {bool flipH = false, bool flipV = false,

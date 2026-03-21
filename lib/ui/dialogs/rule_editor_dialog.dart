@@ -39,6 +39,11 @@ extension _TriggerUI on TriggerType {
         TriggerType.keyLeftPressed           => Icons.keyboard_arrow_left,
         TriggerType.keyRightPressed          => Icons.keyboard_arrow_right,
         TriggerType.keySpacePressed          => Icons.space_bar,
+        TriggerType.keyUpReleased    => Icons.keyboard_arrow_up,
+        TriggerType.keyDownReleased  => Icons.keyboard_arrow_down,
+        TriggerType.keyLeftReleased  => Icons.keyboard_arrow_left,
+        TriggerType.keyRightReleased => Icons.keyboard_arrow_right,
+        TriggerType.keySpaceReleased => Icons.space_bar,
         TriggerType.playerTouchesEnemy       => Icons.dangerous,
         TriggerType.playerTouchesCollectible => Icons.star_outline,
         TriggerType.playerTouchesDoor        => Icons.meeting_room,
@@ -61,6 +66,11 @@ extension _TriggerUI on TriggerType {
         TriggerType.keyLeftPressed           => 'Left Key',
         TriggerType.keyRightPressed          => 'Right Key',
         TriggerType.keySpacePressed          => 'Space Key',
+        TriggerType.keyUpReleased    => 'Up Released',
+        TriggerType.keyDownReleased  => 'Down Released',
+        TriggerType.keyLeftReleased  => 'Left Released',
+        TriggerType.keyRightReleased => 'Right Released',
+        TriggerType.keySpaceReleased => 'Space Released',
         TriggerType.playerTouchesEnemy       => 'Touches Enemy',
         TriggerType.playerTouchesCollectible => 'Picks up Item',
         TriggerType.playerTouchesDoor        => 'Enters Door',
@@ -110,6 +120,8 @@ extension _ActionUI on ActionType {
         ActionType.stopProjectile        => Icons.cancel_schedule_send,
         ActionType.playEffect            => Icons.auto_fix_high,
         ActionType.shakeCamera           => Icons.vibration,
+        ActionType.playAnimation => Icons.play_circle_outline,
+        ActionType.stopAnimation => Icons.stop_circle_outlined,
       };
 
   String get shortLabel => switch (this) {
@@ -141,6 +153,8 @@ extension _ActionUI on ActionType {
         ActionType.stopProjectile        => 'Stop Projectile',
         ActionType.playEffect            => 'Play Effect',
         ActionType.shakeCamera           => 'Shake Camera',
+        ActionType.playAnimation => 'Play Animation',
+        ActionType.stopAnimation => 'Stop Animation',
       };
 
   Color get catColor => _aCats[category]!.color;

@@ -10,6 +10,12 @@ enum TriggerType {
   keyLeftPressed,
   keyRightPressed,
   keySpacePressed,
+  // Key released
+  keyUpReleased,
+  keyDownReleased,
+  keyLeftReleased,
+  keyRightReleased,
+  keySpaceReleased,
   // Proximity / collision
   playerTouchesEnemy,
   playerTouchesCollectible,
@@ -38,6 +44,11 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.keyLeftPressed => 'Key Left pressed (← / A)',
         TriggerType.keyRightPressed => 'Key Right pressed (→ / D)',
         TriggerType.keySpacePressed => 'Key Space pressed',
+        TriggerType.keyUpReleased    => 'Key Up released (↑ / W)',
+        TriggerType.keyDownReleased  => 'Key Down released (↓ / S)',
+        TriggerType.keyLeftReleased  => 'Key Left released (← / A)',
+        TriggerType.keyRightReleased => 'Key Right released (→ / D)',
+        TriggerType.keySpaceReleased => 'Key Space released',
         TriggerType.playerTouchesEnemy => 'Player touches Enemy',
         TriggerType.playerTouchesCollectible => 'Player touches Collectible',
         TriggerType.playerTouchesDoor => 'Player touches Door',
@@ -61,6 +72,12 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.keyRightPressed ||
         TriggerType.keySpacePressed =>
           TriggerCategory.input,
+        TriggerType.keyUpReleased   ||
+        TriggerType.keyDownReleased ||
+        TriggerType.keyLeftReleased ||
+        TriggerType.keyRightReleased ||
+        TriggerType.keySpaceReleased =>
+        TriggerCategory.input,
         TriggerType.playerTouchesEnemy ||
         TriggerType.playerTouchesCollectible ||
         TriggerType.playerTouchesDoor ||
@@ -87,6 +104,12 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.keySpacePressed ||
         TriggerType.enemyNearPlayer =>
           true,
+        TriggerType.keyUpReleased    ||
+        TriggerType.keyDownReleased  ||
+        TriggerType.keyLeftReleased  ||
+        TriggerType.keyRightReleased ||
+        TriggerType.keySpaceReleased => 
+          false,
         TriggerType.playerEntersWater ||
         TriggerType.playerExitsWater ||
         TriggerType.playerFishes ||
@@ -151,6 +174,9 @@ enum ActionType {
   playEffect,
   // Camera
   shakeCamera,
+  //World
+  playAnimation,
+  stopAnimation,
 }
 
 extension ActionTypeExtension on ActionType {
@@ -183,6 +209,8 @@ extension ActionTypeExtension on ActionType {
         ActionType.stopProjectile => 'Stop projectile',
         ActionType.playEffect => 'Play effect',
         ActionType.shakeCamera => 'Shake camera',
+        ActionType.playAnimation => 'Play animation',
+        ActionType.stopAnimation => 'Stop animation',
       };
 
   ActionCategory get category => switch (this) {
@@ -219,6 +247,8 @@ extension ActionTypeExtension on ActionType {
         ActionType.stopProjectile => ActionCategory.world,
         ActionType.playEffect => ActionCategory.effects,
         ActionType.shakeCamera => ActionCategory.effects,
+        ActionType.playAnimation || 
+        ActionType.stopAnimation => ActionCategory.world,
       };
 
   /// Parameter keys this action expects.
@@ -348,6 +378,32 @@ extension ActionTypeExtension on ActionType {
           ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'bomb'),
           ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'explosion'),
         ],
+        ActionType.playAnimation => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+          choices: {
+            'player': 'Player',
+            'trigger': 'Trigger Object',
+            'enemies': 'All Enemies',
+            'named': 'Object by Name',
+            'tag': 'Objects by Tag',
+          }),
+          ActionParam('animName', ActionParamType.text, label: 'Animation name',hint: 'walk_right'),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name',hint: 'MyNpc'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag',hint: 'guard'),
+        ],
+        ActionType.stopAnimation => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+          choices: {
+            'player': 'Player',
+            'trigger': 'Trigger Object',
+            'enemies': 'All Enemies',
+            'named': 'Object by Name',
+            'tag': 'Objects by Tag',
+          }),
+          ActionParam('animName', ActionParamType.text, label: 'Animation name',hint: 'walk_right'),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name',hint: 'MyNpc'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag',hint: 'guard'),
+        ],
       };
 
   String summarize(Map<String, dynamic> p) => switch (this) {
@@ -460,6 +516,18 @@ extension ActionTypeExtension on ActionType {
                 : t == 'tag' ? '#${p['tag'] ?? ''}'
                 : t;
             return fx.isNotEmpty ? '"$fx" effect @ $where' : 'Effect @ $where';
+          }(),
+        ActionType.playAnimation => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"'
+                : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Play anim "${p['animName'] ?? ''}" on $who';
+          }(),
+          ActionType.stopAnimation => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"'
+                : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            return 'Stop anim ($who)';
           }(),
       };
 }
