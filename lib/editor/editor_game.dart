@@ -505,6 +505,21 @@ class EditorGame extends FlameGame with ScrollDetector {
     }
   }
 
+  void paintCollision(Offset screenPos, {required bool leftButton}) {
+    final cam = editorCamera;
+    if (cam == null) return;
+    final ts = mapData.tileSize.toDouble();
+    final wx = cam.viewfinder.position.x + screenPos.dx / cam.viewfinder.zoom;
+    final wy = cam.viewfinder.position.y + screenPos.dy / cam.viewfinder.zoom;
+    final tx = (wx / ts).floor().clamp(0, mapData.width - 1);
+    final ty = (wy / ts).floor().clamp(0, mapData.height - 1);
+    if (leftButton) {
+      mapData.setTileCollision(tx, ty, 2); // always SET, never toggle
+    } else {
+      mapData.setTileCollision(tx, ty, 0); // always CLEAR, never toggle
+    }
+  }
+
   // ─── Object Placement ───────────────────────────────────────────────────────
 
   GameObject? placeObject(Offset screenPos, GameObjectType type, EditorState es,

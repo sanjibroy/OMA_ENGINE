@@ -841,6 +841,11 @@ class _SpritesheetEditorState extends State<_SpritesheetEditor> {
   final _fwCtrl = TextEditingController(text: '32');
   final _fhCtrl = TextEditingController(text: '32');
   final _fcCtrl = TextEditingController(text: '0');
+  final _startRowCtrl = TextEditingController(text: '0');
+  final _endRowCtrl = TextEditingController(text: '-1');
+
+  double _previewZoom = 1.0;
+
   bool _applying = false;
 
   @override
@@ -853,6 +858,8 @@ class _SpritesheetEditorState extends State<_SpritesheetEditor> {
       _fwCtrl.text = '${def.frameWidth}';
       _fhCtrl.text = '${def.frameHeight}';
       _fcCtrl.text = '${def.frameCount}';
+      _startRowCtrl.text = '${def.startRow}';
+      _endRowCtrl.text = '${def.endRow}';
       _loadPreview(def.path);
     }
   }
@@ -863,6 +870,8 @@ class _SpritesheetEditorState extends State<_SpritesheetEditor> {
     _fhCtrl.dispose();
     _fcCtrl.dispose();
     _sheetImage?.dispose();
+    _startRowCtrl.dispose();
+    _endRowCtrl.dispose();
     super.dispose();
   }
 
@@ -906,8 +915,15 @@ class _SpritesheetEditorState extends State<_SpritesheetEditor> {
     if (fw <= 0 || fh <= 0) return;
 
     setState(() => _applying = true);
+    final startRow = int.tryParse(_startRowCtrl.text) ?? 0;
+    final endRow = int.tryParse(_endRowCtrl.text) ?? -1;
     final def = AnimSheetDef(
-        path: path, frameWidth: fw, frameHeight: fh, frameCount: fc);
+        path: path,
+        frameWidth: fw,
+        frameHeight: fh,
+        frameCount: fc,
+        startRow: startRow,
+        endRow: endRow);
     final animKey = '${widget.type.name}:${widget.variantIndex}';
     await widget.cache.setSheetAnim(widget.type, widget.variantIndex, widget.animName, def);
 
@@ -927,10 +943,14 @@ class _SpritesheetEditorState extends State<_SpritesheetEditor> {
     final fh = int.tryParse(_fhCtrl.text) ?? 0;
     if (fw <= 0 || fh <= 0) return 0;
     final cols = img.width ~/ fw;
-    final rows = img.height ~/ fh;
-    final total = cols * rows;
+    final totalRows = img.height ~/ fh;
+    final startRow = (int.tryParse(_startRowCtrl.text) ?? 0).clamp(0, totalRows - 1);
+    final endRow = (int.tryParse(_endRowCtrl.text) ?? -1);
+    final effectiveEnd = (endRow < 0 ? totalRows - 1 : endRow).clamp(startRow, totalRows - 1);
+    final rowCount = effectiveEnd - startRow + 1;
+    final totalCells = cols * rowCount;
     final fc = int.tryParse(_fcCtrl.text) ?? 0;
-    return (fc > 0 && fc <= total) ? fc : total;
+    return (fc > 0 && fc <= totalCells) ? fc : totalCells;
   }
 
   @override
@@ -984,8 +1004,20 @@ class _SpritesheetEditorState extends State<_SpritesheetEditor> {
               _numField('Count (0=auto)', _fcCtrl, width: 110),
             ],
           ),
-
-          const SizedBox(height: 12),
+            const SizedBox(height: 8),
+          Row(
+            children: [
+              _numField('Start Row', _startRowCtrl),
+              const SizedBox(width: 8),
+              _numField('End Row (-1=all)', _endRowCtrl, width: 120),
+            ],
+          ),
+          // Helper text
+          const SizedBox(height: 6),
+          const Text(
+            'Rows are 0-indexed. e.g. Row 0 = idle, Row 1 = walk_right',
+            style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+          ),
 
           // Detected count label
           if (hasPath)
@@ -1039,12 +1071,68 @@ class _SpritesheetEditorState extends State<_SpritesheetEditor> {
           const SizedBox(height: 16),
 
           // Preview with grid overlay
-          if (img != null)
+          if (img != null) ...[
+            // Zoom controls
+            Row(
+              children: [
+                const Text('Zoom',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => setState(() => _previewZoom = (_previewZoom - 0.25).clamp(0.25, 4.0)),
+                  child: Container(
+                    width: 24, height: 24,
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceBg,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: AppColors.borderColor),
+                    ),
+                    child: const Icon(Icons.remove, size: 12, color: AppColors.textSecondary),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${(_previewZoom * 100).round()}%',
+                  style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => setState(() => _previewZoom = (_previewZoom + 0.25).clamp(0.25, 4.0)),
+                  child: Container(
+                    width: 24, height: 24,
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceBg,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: AppColors.borderColor),
+                    ),
+                    child: const Icon(Icons.add, size: 12, color: AppColors.textSecondary),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Reset zoom button
+                GestureDetector(
+                  onTap: () => setState(() => _previewZoom = 1.0),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceBg,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: AppColors.borderColor),
+                    ),
+                    child: const Text('Reset',
+                        style: TextStyle(color: AppColors.textMuted, fontSize: 10)),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
             _SheetPreview(
               image: img,
               frameWidth: int.tryParse(_fwCtrl.text) ?? 0,
               frameHeight: int.tryParse(_fhCtrl.text) ?? 0,
+              zoom: _previewZoom,
             ),
+          ],
         ],
       ),
     );
@@ -1094,11 +1182,13 @@ class _SheetPreview extends StatelessWidget {
   final ui.Image image;
   final int frameWidth;
   final int frameHeight;
+  final double zoom;
 
   const _SheetPreview({
     required this.image,
     required this.frameWidth,
     required this.frameHeight,
+    this.zoom = 1.0,
   });
 
   @override
@@ -1107,7 +1197,8 @@ class _SheetPreview extends StatelessWidget {
     const maxH = 200.0;
     final iw = image.width.toDouble();
     final ih = image.height.toDouble();
-    final scale = (maxW / iw).clamp(0.0, maxH / ih).clamp(0.0, 1.0);
+    final baseScale = (maxW / iw).clamp(0.0, maxH / ih).clamp(0.0, 1.0);
+    final scale = baseScale * zoom;
     final dispW = iw * scale;
     final dispH = ih * scale;
 
@@ -1120,23 +1211,29 @@ class _SheetPreview extends StatelessWidget {
                 fontSize: 10,
                 fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
-        Container(
-          width: dispW,
-          height: dispH,
-          decoration: BoxDecoration(
-            border: Border.all(color: AppColors.borderColor),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: CustomPaint(
-              painter: _GridPainter(
-                image: image,
-                frameWidth: frameWidth,
-                frameHeight: frameHeight,
-                scale: scale,
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.vertical,
+            child: Container(
+              width: dispW,
+              height: dispH,
+              decoration: BoxDecoration(
+                border: Border.all(color: AppColors.borderColor),
+                borderRadius: BorderRadius.circular(4),
               ),
-              size: Size(dispW, dispH),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(3),
+                child: CustomPaint(
+                  painter: _GridPainter(
+                    image: image,
+                    frameWidth: frameWidth,
+                    frameHeight: frameHeight,
+                    scale: scale,
+                  ),
+                  size: Size(dispW, dispH),
+                ),
+              ),
             ),
           ),
         ),

@@ -17,6 +17,8 @@ class CenterCanvas extends StatefulWidget {
 }
 
 class _CenterCanvasState extends State<CenterCanvas> {
+  bool _isPaintingCollision = false;
+  bool _collisionLeftButton = false;
   late final EditorGame _game;
   final FocusNode _gameFocusNode = FocusNode();
 
@@ -360,6 +362,8 @@ class _CenterCanvasState extends State<CenterCanvas> {
       }
     } else if (tool == EditorTool.collision) {
       _state.pushUndo();
+      _isPaintingCollision = true; 
+      _collisionLeftButton = e.buttons == kPrimaryMouseButton;
       if (e.buttons == kPrimaryMouseButton) {
         _game.toggleCollision(e.localPosition, leftButton: true);
       } else if (e.buttons == kSecondaryMouseButton) {
@@ -462,6 +466,10 @@ class _CenterCanvasState extends State<CenterCanvas> {
     }
     if (_isErasing) {
       _game.eraseTile(e.localPosition, layerIndex: _state.activeLayerIndex.value);
+    }
+    if (_isPaintingCollision) {
+      _game.paintCollision(e.localPosition, leftButton: _collisionLeftButton);
+      _state.notifyMapChanged();
     }
     if (_rectStart != null) {
       setState(() => _rectCurrent = e.localPosition);
@@ -595,6 +603,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _isPanning = false;
     _isPainting = false;
     _isErasing = false;
+    _isPaintingCollision = false;
     _draggedObject = null;
   }
 
@@ -602,6 +611,7 @@ class _CenterCanvasState extends State<CenterCanvas> {
     _isPanning = false;
     _isPainting = false;
     _isErasing = false;
+    _isPaintingCollision = false;
     setState(() {
       _rectStart = null;
       _rectCurrent = null;

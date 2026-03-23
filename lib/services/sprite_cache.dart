@@ -10,12 +10,16 @@ class AnimSheetDef {
   final int frameWidth;
   final int frameHeight;
   final int frameCount;    // 0 = auto (all cells in grid)
+  final int startRow;
+  final int endRow;
 
   const AnimSheetDef({
     required this.path,
     required this.frameWidth,
     required this.frameHeight,
     this.frameCount = 0,
+    this.startRow = 0,
+    this.endRow = -1,
   });
 
   Map<String, dynamic> toJson() => {
@@ -23,6 +27,8 @@ class AnimSheetDef {
         'frameWidth': frameWidth,
         'frameHeight': frameHeight,
         'frameCount': frameCount,
+        'startRow': startRow,
+        'endRow': endRow,
       };
 
   factory AnimSheetDef.fromJson(Map<String, dynamic> j) => AnimSheetDef(
@@ -326,8 +332,14 @@ class SpriteCache {
     if (fw <= 0 || fh <= 0) return [];
 
     final cols = sheetW ~/ fw;
-    final rows = sheetH ~/ fh;
-    final totalCells = cols * rows;
+    final totalRows = sheetH ~/ fh;
+
+    // Row range
+    final startRow = def.startRow.clamp(0, totalRows - 1);
+    final endRow = (def.endRow < 0 ? totalRows - 1 : def.endRow)
+        .clamp(startRow, totalRows - 1);
+    final rowCount = endRow - startRow + 1;
+    final totalCells = cols * rowCount;
     final count = (def.frameCount > 0 && def.frameCount <= totalCells)
         ? def.frameCount
         : totalCells;
@@ -335,7 +347,7 @@ class SpriteCache {
     final frames = <ui.Image>[];
     for (int i = 0; i < count; i++) {
       final col = i % cols;
-      final row = i ~/ cols;
+      final row = startRow + (i ~/ cols); // offset by startRow
       final srcRect = ui.Rect.fromLTWH(
           col * fw.toDouble(), row * fh.toDouble(), fw.toDouble(), fh.toDouble());
       final dstRect = ui.Rect.fromLTWH(0, 0, fw.toDouble(), fh.toDouble());
