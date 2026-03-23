@@ -32,11 +32,13 @@ class AnimSheetDef {
       };
 
   factory AnimSheetDef.fromJson(Map<String, dynamic> j) => AnimSheetDef(
-        path: j['path'] as String,
-        frameWidth: j['frameWidth'] as int,
-        frameHeight: j['frameHeight'] as int,
-        frameCount: j['frameCount'] as int? ?? 0,
-      );
+      path: j['path'] as String,
+      frameWidth: j['frameWidth'] as int,
+      frameHeight: j['frameHeight'] as int,
+      frameCount: j['frameCount'] as int? ?? 0,
+      startRow: j['startRow'] as int? ?? 0,
+      endRow: j['endRow'] as int? ?? -1,
+    );
 }
 
 // ─── SpriteCache ──────────────────────────────────────────────────────────
