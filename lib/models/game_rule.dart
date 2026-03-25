@@ -160,6 +160,8 @@ enum ActionType {
   adjustRotation,
   flipH,
   flipV,
+  setFlipH,
+  setFlipV,
   // Visibility
   hideObject,
   showObject,
@@ -177,6 +179,7 @@ enum ActionType {
   //World
   playAnimation,
   stopAnimation,
+
 }
 
 extension ActionTypeExtension on ActionType {
@@ -200,6 +203,8 @@ extension ActionTypeExtension on ActionType {
         ActionType.adjustRotation => 'Adjust rotation (relative)',
         ActionType.flipH => 'Flip horizontally',
         ActionType.flipV => 'Flip vertically',
+        ActionType.setFlipH => 'Set Flip Horizontal',
+        ActionType.setFlipV => 'Set Flip Vertical',
         ActionType.hideObject => 'Hide object',
         ActionType.showObject => 'Show object',
         ActionType.fadeIn => 'Fade in',
@@ -236,6 +241,8 @@ extension ActionTypeExtension on ActionType {
         ActionType.adjustRotation ||
         ActionType.flipH ||
         ActionType.flipV ||
+        ActionType.setFlipH ||
+        ActionType.setFlipV => ActionCategory.world,
         ActionType.hideObject ||
         ActionType.showObject =>
           ActionCategory.world,
@@ -318,6 +325,38 @@ extension ActionTypeExtension on ActionType {
               choices: {'player': 'Player', 'trigger': 'Trigger Object', 'enemies': 'All Enemies', 'named': 'Object by Name', 'tag': 'Objects by Tag'}),
           ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'myObject'),
           ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'breakable'),
+        ],
+        ActionType.setFlipH => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {
+                'player': 'Player',
+                'trigger': 'Trigger Object',
+                'enemies': 'All Enemies',
+                'named': 'Object by Name',
+                'tag': 'Objects by Tag',
+              }),
+          ActionParam('value', ActionParamType.choice, label: 'Flip',
+              choices: {'true': 'Flipped', 'false': 'Normal'}),
+          ActionParam('objectName', ActionParamType.text,
+              label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text,
+              label: 'Tag', hint: 'guard'),
+        ],
+        ActionType.setFlipV => [
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+              choices: {
+                'player': 'Player',
+                'trigger': 'Trigger Object',
+                'enemies': 'All Enemies',
+                'named': 'Object by Name',
+                'tag': 'Objects by Tag',
+              }),
+          ActionParam('value', ActionParamType.choice, label: 'Flip',
+              choices: {'true': 'Flipped', 'false': 'Normal'}),
+          ActionParam('objectName', ActionParamType.text,
+              label: 'Object name', hint: 'myObject'),
+          ActionParam('tag', ActionParamType.text,
+              label: 'Tag', hint: 'guard'),
         ],
         ActionType.hideObject => [
           ActionParam('target', ActionParamType.choice, label: 'Target',
@@ -463,6 +502,20 @@ extension ActionTypeExtension on ActionType {
             final t = p['target'] as String? ?? 'player';
             final who = t == 'named' ? '"${p['objectName'] ?? ''}"' : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
             return 'Flip V ($who)';
+          }(),
+        ActionType.setFlipH => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"'
+                : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            final v = p['value'] as String? ?? 'false';
+            return 'FlipH ${v == 'true' ? 'ON' : 'OFF'} ($who)';
+          }(),
+          ActionType.setFlipV => () {
+            final t = p['target'] as String? ?? 'player';
+            final who = t == 'named' ? '"${p['objectName'] ?? ''}"'
+                : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
+            final v = p['value'] as String? ?? 'false';
+            return 'FlipV ${v == 'true' ? 'ON' : 'OFF'} ($who)';
           }(),
         ActionType.hideObject => () {
             final t = p['target'] as String? ?? 'trigger';

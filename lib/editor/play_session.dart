@@ -1426,6 +1426,44 @@ class PlaySession {
           } else if (target == 'enemies') {
             for (final e in _enemies) e.source.flipV = !e.source.flipV;
           }
+
+          case ActionType.setFlipH:
+            final target = a.params['target'] as String? ?? 'player';
+            final value = (a.params['value'] as String? ?? 'false') == 'true';
+            if (target == 'player') {
+              _playerFlipH = value;
+            } else if (target == 'trigger' && triggerObj != null) {
+              triggerObj.flipH = value;
+            } else if (target == 'named') {
+              final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+              if (obj != null) obj.flipH = value;
+            } else if (target == 'tag') {
+              for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+                obj.flipH = value;
+              }
+            } else if (target == 'enemies') {
+              for (final e in _enemies) e.source.flipH = value;
+            }
+
+          case ActionType.setFlipV:
+            final target = a.params['target'] as String? ?? 'player';
+            final value = (a.params['value'] as String? ?? 'false') == 'true';
+            if (target == 'player') {
+              _playerFlipV = value;
+            } else if (target == 'trigger' && triggerObj != null) {
+              triggerObj.flipV = value;
+            } else if (target == 'named') {
+              final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+              if (obj != null) obj.flipV = value;
+            } else if (target == 'tag') {
+              for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+                obj.flipV = value;
+              }
+            } else if (target == 'enemies') {
+              for (final e in _enemies) e.source.flipV = value;
+            }
+
+
         case ActionType.hideObject:
           final target = a.params['target'] as String? ?? 'trigger';
           if (target == 'player') {
