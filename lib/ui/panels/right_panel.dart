@@ -11,6 +11,7 @@ import '../../theme/app_theme.dart';
 import '../dialogs/rule_editor_dialog.dart';
 import '../dialogs/animations_dialog.dart';
 import 'package:file_picker/file_picker.dart';
+import '../dialogs/rule_editor_v2.dart';
 
 class RightPanel extends StatefulWidget {
   final EditorState editorState;
@@ -2361,6 +2362,18 @@ class _RulesTabState extends State<_RulesTab> {
     setState(() {});
   }
 
+  Future<void> _openManagerV2() async {
+  await RulesManagerV2.show(
+    context,
+    rules: widget.editorState.mapData.rules,
+    availableMaps: widget.editorState.project.maps,
+    availableEffects: widget.editorState.project.effects,
+    keyBindings: widget.editorState.project.keyBindings,
+    onChanged: () => setState(() {}),
+  );
+  setState(() {});
+}
+
   @override
   Widget build(BuildContext context) {
     final hasOtherMaps = widget.editorState.project.maps.length > 1;
@@ -2383,6 +2396,15 @@ class _RulesTabState extends State<_RulesTab> {
                 message: 'Open rules manager',
                 child: GestureDetector(
                   onTap: _openManager,
+                  child: const Icon(Icons.open_in_full,
+                      size: 14, color: AppColors.textSecondary),
+                ),
+              ),
+              const Spacer(),
+              Tooltip(
+                message: 'Manager V2',
+                child: GestureDetector(
+                  onTap: _openManagerV2,
                   child: const Icon(Icons.open_in_full,
                       size: 14, color: AppColors.textSecondary),
                 ),

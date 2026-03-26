@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:oma_engine/ui/dialogs/rule_editor_v2.dart';
 import '../../editor/editor_state.dart';
 import '../../models/game_project.dart';
 import '../../services/export_service.dart';
@@ -341,6 +342,7 @@ class _ToolbarState extends State<Toolbar> {
         color: AppColors.panelBg,
         border: Border(bottom: BorderSide(color: AppColors.borderColor)),
       ),
+      
       child: Row(
         children: [
           // Logo
@@ -401,6 +403,20 @@ class _ToolbarState extends State<Toolbar> {
               context,
               items: _es.project.items,
               onChanged: _es.notifyProjectChanged,
+            ),
+          ),
+
+          _ToolbarButton(
+            icon: Icons.bolt,
+            label: 'Rules',
+            tooltip: 'Game Rules',
+            onTap: () => RulesManagerV2.show(
+              context,
+              rules: _es.mapData.rules,
+              availableMaps: _es.project.maps,
+              availableEffects: _es.project.effects,
+              keyBindings: _es.project.keyBindings,
+              onChanged: _es.notifyMapChanged,
             ),
           ),
 
@@ -667,6 +683,8 @@ class _ToolbarState extends State<Toolbar> {
           ),
         ],
       ),
+
+      
     );
   }
 

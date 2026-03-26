@@ -185,9 +185,13 @@ class _PickerSection<T> {
 List<_PickerSection<TriggerType>> _triggerSections() {
   return TriggerCategory.values.map((cat) {
     final info = _tCats[cat]!;
-    final items = TriggerType.values
+    /* final items = TriggerType.values
         .where((t) => t.category == cat)
         .map((t) => _PickerItem<TriggerType>(t, t.icon, t.shortLabel, info.color))
+        .toList(); */
+    final items = TriggerType.values
+        .where((t) => t.category == cat)
+        .map((t) => _PickerItem<TriggerType>(t, t.icon, "", info.color))
         .toList();
     return _PickerSection<TriggerType>(info.label, info.icon, info.color, items);
   }).toList();
@@ -524,7 +528,8 @@ class _RuleEditorDialogState extends State<RuleEditorDialog> {
 
   /// Returns display label for a trigger, appending the bound key if remapped.
   String _triggerLabel(TriggerType t) {
-    final base = t.shortLabel;
+    final base = "";
+    //final base = t.shortLabel;
     final bound = widget.keyBindings[t.name];
     if (bound == null || bound.isEmpty) return base;
     return '$base [${bound.toUpperCase()}]';

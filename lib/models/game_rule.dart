@@ -65,6 +65,34 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.enemyDefeated => 'Enemy is defeated',
       };
 
+  String get shortLabel => switch (this) {
+        TriggerType.keyUpPressed             => 'Up Key',
+        TriggerType.keyDownPressed           => 'Down Key',
+        TriggerType.keyLeftPressed           => 'Left Key',
+        TriggerType.keyRightPressed          => 'Right Key',
+        TriggerType.keySpacePressed          => 'Space Key',
+        TriggerType.keyUpReleased    => 'Up Released',
+        TriggerType.keyDownReleased  => 'Down Released',
+        TriggerType.keyLeftReleased  => 'Left Released',
+        TriggerType.keyRightReleased => 'Right Released',
+        TriggerType.keySpaceReleased => 'Space Released',
+        TriggerType.playerTouchesEnemy       => 'Touches Enemy',
+        TriggerType.playerTouchesCollectible => 'Picks up Item',
+        TriggerType.playerTouchesDoor        => 'Enters Door',
+        TriggerType.playerTouchesNpc         => 'Talks to NPC',
+        TriggerType.enemyNearPlayer          => 'Enemy Nearby',
+        TriggerType.playerHealthZero         => 'Health = 0',
+        TriggerType.gameStart                => 'Game Starts',
+        TriggerType.onTimer                  => 'Timer',
+        TriggerType.playerEntersWater        => 'Enters Water',
+        TriggerType.playerExitsWater         => 'Exits Water',
+        TriggerType.playerFishes             => 'Fishes',
+        TriggerType.playerTouchesHazard      => 'Touches Hazard',
+        TriggerType.playerActivatesCheckpoint => 'Activates Checkpoint',
+        TriggerType.enemyDefeated            => 'Enemy Defeated',
+      };
+
+
   TriggerCategory get category => switch (this) {
         TriggerType.keyUpPressed ||
         TriggerType.keyDownPressed ||
