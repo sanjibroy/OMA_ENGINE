@@ -397,7 +397,7 @@ class _ToolbarState extends State<Toolbar> {
           ),
           _ToolbarButton(
             icon: Icons.sports_martial_arts,
-            label: 'Items',
+            
             tooltip: 'Items & Weapons',
             onTap: () => ItemsDialog.show(
               context,
@@ -408,7 +408,7 @@ class _ToolbarState extends State<Toolbar> {
 
           _ToolbarButton(
             icon: Icons.bolt,
-            label: 'Rules',
+            
             tooltip: 'Game Rules',
             onTap: () => RulesManagerV2.show(
               context,

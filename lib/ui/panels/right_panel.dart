@@ -40,7 +40,7 @@ class _RightPanelState extends State<RightPanel> {
   }
 
   Widget _buildTabBar() {
-    const tabs = ['Properties', 'Rules', 'Effects', 'Code'];
+    const tabs = ['Properties',  'Effects', 'Code'];
     return Container(
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: AppColors.borderColor)),
@@ -83,9 +83,9 @@ class _RightPanelState extends State<RightPanel> {
   Widget _buildContent() {
     return switch (_selectedTab) {
       0 => _PropertiesTab(editorState: widget.editorState),
-      1 => _RulesTab(editorState: widget.editorState),
-      2 => _EffectsTab(editorState: widget.editorState),
-      3 => const _CodeTab(),
+      //1 => _RulesTab(editorState: widget.editorState),
+      1 => _EffectsTab(editorState: widget.editorState),
+      2 => const _CodeTab(),
       _ => const SizedBox(),
     };
   }
