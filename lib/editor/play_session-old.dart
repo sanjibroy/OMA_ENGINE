@@ -166,9 +166,6 @@ class _Enemy {
 class PlaySession {
   final Map<String, String> _forcedAnims = {};
   String _playerForcedAnim = '';
-  // Objects/player whose forced anim should clear once the current cycle finishes
-  final Set<String> _pendingStopAnims = {};
-  bool _playerPendingStop = false;
 
   final MapData mapData;
   final SpriteCache spriteCache;
@@ -278,49 +275,10 @@ class PlaySession {
 
   void _setForcedAnim(String objectId, String animName) {
     _forcedAnims[objectId] = animName;
-    _pendingStopAnims.remove(objectId); // cancel any pending stop
   }
 
   void _clearForcedAnim(String objectId) {
-    // Don't clear immediately — wait for the current cycle to finish
-    if (_forcedAnims.containsKey(objectId)) {
-      _pendingStopAnims.add(objectId);
-    }
-  }
-
-  /// Called each frame for objects/player with a pending stop.
-  /// Returns the forced anim to use this frame, and clears it if the cycle just ended.
-  String? _tickForcedAnim(String objectId, GameObjectType type, int variantIndex) {
-    final anim = _forcedAnims[objectId];
-    if (anim == null) return null;
-    if (!_pendingStopAnims.contains(objectId)) return anim;
-    // Pending stop: check if we're on the last frame
-    final fps = spriteCache.getAnimFps(type, variantIndex, anim);
-    final frameCount = spriteCache.animFrameCount(type, variantIndex, anim);
-    if (frameCount > 0) {
-      final frameIndex = (_elapsedSec * fps).floor() % frameCount;
-      if (frameIndex == frameCount - 1) {
-        // Last frame — clear after this render
-        _forcedAnims.remove(objectId);
-        _pendingStopAnims.remove(objectId);
-      }
-    }
-    return anim;
-  }
-
-  String? _tickPlayerForcedAnim(GameObjectType type, int variantIndex) {
-    if (_playerForcedAnim.isEmpty) return null;
-    if (!_playerPendingStop) return _playerForcedAnim;
-    final fps = spriteCache.getAnimFps(type, variantIndex, _playerForcedAnim);
-    final frameCount = spriteCache.animFrameCount(type, variantIndex, _playerForcedAnim);
-    if (frameCount > 0) {
-      final frameIndex = (_elapsedSec * fps).floor() % frameCount;
-      if (frameIndex == frameCount - 1) {
-        _playerForcedAnim = '';
-        _playerPendingStop = false;
-      }
-    }
-    return _playerForcedAnim.isNotEmpty ? _playerForcedAnim : null;
+    _forcedAnims.remove(objectId);
   }
 
   static const Map<String, LogicalKeyboardKey> _kKeyMap = {
@@ -1766,7 +1724,6 @@ class PlaySession {
           if (animName.isEmpty) break;
           if (target == 'player') {
             _playerForcedAnim = animName;
-            _playerPendingStop = false;
           } else if (target == 'trigger' && triggerObj != null) {
             _setForcedAnim(triggerObj.id, animName);
           } else if (target == 'named') {
@@ -1783,7 +1740,7 @@ class PlaySession {
       case ActionType.stopAnimation:
         final target = a.params['target'] as String? ?? 'player';
         if (target == 'player') {
-          _playerPendingStop = true;
+          _playerForcedAnim = '';
         } else if (target == 'trigger' && triggerObj != null) {
           _clearForcedAnim(triggerObj.id);
         } else if (target == 'named') {
@@ -1890,7 +1847,7 @@ class PlaySession {
             flipH: obj.flipH, flipV: obj.flipV,
             scale: obj.scale, rotation: obj.rotation, alpha: alpha,
             variantIndex: obj.variantIndex,
-            forcedAnim: _tickForcedAnim(obj.id, obj.type, obj.variantIndex),
+            forcedAnim: _forcedAnims[obj.id],
             useAnimation: mapData.getVariantUseAnimation(obj.type, obj.variantIndex)),
       ));
     }
@@ -1911,7 +1868,7 @@ class PlaySession {
             flipH: e.source.flipH, flipV: e.source.flipV,
             scale: e.source.scale, rotation: e.source.rotation, alpha: e.alpha,
             variantIndex: e.source.variantIndex,
-            forcedAnim: _tickForcedAnim(e.source.id, e.source.type, e.source.variantIndex),
+            forcedAnim: _forcedAnims[e.source.id],
             useAnimation: mapData.getVariantUseAnimation(e.source.type, e.source.variantIndex)),
       ));
     }
@@ -1938,7 +1895,7 @@ class PlaySession {
           final playerSprite = _resolveSprite(GameObjectType.playerSpawn,
             variantIndex: spawn?.variantIndex ?? 0,
             useAnimation: spawn?.useAnimation ?? false,
-            forcedAnim: _tickPlayerForcedAnim(GameObjectType.playerSpawn, spawn?.variantIndex ?? 0));
+            forcedAnim: _playerForcedAnim.isNotEmpty ? _playerForcedAnim : null);
 
           if (playerSprite != null) {
             _drawSprite(canvas, playerSprite, playerDrawX, playerDrawY, ts,

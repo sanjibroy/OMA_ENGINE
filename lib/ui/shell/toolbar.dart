@@ -417,6 +417,7 @@ class _ToolbarState extends State<Toolbar> {
               availableEffects: _es.project.effects,
               keyBindings: _es.project.keyBindings,
               onChanged: _es.notifyMapChanged,
+              availableAnimations: _es.spriteCache.allAnimationNames,
             ),
           ),
 

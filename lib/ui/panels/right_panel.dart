@@ -2370,6 +2370,7 @@ class _RulesTabState extends State<_RulesTab> {
     availableEffects: widget.editorState.project.effects,
     keyBindings: widget.editorState.project.keyBindings,
     onChanged: () => setState(() {}),
+    availableAnimations: [],
   );
   setState(() {});
 }

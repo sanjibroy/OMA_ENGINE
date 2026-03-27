@@ -48,6 +48,12 @@ class SpriteCache {
   final Map<GameObjectType, List<ui.Image>> _objVariantImages = {};
   final Map<GameObjectType, List<String>> _objVariantPaths = {};
 
+  List<String> get allAnimationNames =>
+    _animImages.values
+        .expand((m) => m.keys)
+        .toSet()
+        .toList();
+
   // Variant 0 getters (backward compat)
   ui.Image? getImage(GameObjectType type) => getVariantImage(type, 0);
   String? getPath(GameObjectType type) => _objVariantPaths[type]?.firstOrNull;
