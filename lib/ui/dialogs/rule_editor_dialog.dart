@@ -58,6 +58,8 @@ extension _TriggerUI on TriggerType {
         TriggerType.playerTouchesHazard      => Icons.warning_amber,
         TriggerType.playerActivatesCheckpoint => Icons.flag,
         TriggerType.enemyDefeated            => Icons.emoji_events,
+        TriggerType.playerAttacks            => Icons.sports_martial_arts
+
       };
 
   String get shortLabel => switch (this) {
@@ -85,6 +87,7 @@ extension _TriggerUI on TriggerType {
         TriggerType.playerTouchesHazard      => 'Touches Hazard',
         TriggerType.playerActivatesCheckpoint => 'Activates Checkpoint',
         TriggerType.enemyDefeated            => 'Enemy Defeated',
+        TriggerType.playerAttacks => 'Player attacks',
       };
 
   Color get catColor => _tCats[category]!.color;
@@ -124,6 +127,7 @@ extension _ActionUI on ActionType {
         ActionType.shakeCamera           => Icons.vibration,
         ActionType.playAnimation => Icons.play_circle_outline,
         ActionType.stopAnimation => Icons.stop_circle_outlined,
+        ActionType.dealDamage    => Icons.gavel,
       };
 
   String get shortLabel => switch (this) {
@@ -159,6 +163,7 @@ extension _ActionUI on ActionType {
         ActionType.shakeCamera           => 'Shake Camera',
         ActionType.playAnimation => 'Play Animation',
         ActionType.stopAnimation => 'Stop Animation',
+        ActionType.dealDamage => 'Deal damage to enemies',
       };
 
   Color get catColor => _aCats[category]!.color;

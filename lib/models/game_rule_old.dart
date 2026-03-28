@@ -35,7 +35,6 @@ enum TriggerType {
   playerActivatesCheckpoint,
   // Combat
   enemyDefeated,
-  playerAttacks,
 }
 
 extension TriggerTypeExtension on TriggerType {
@@ -64,7 +63,6 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.playerTouchesHazard => 'Player touches Hazard',
         TriggerType.playerActivatesCheckpoint => 'Player activates Checkpoint',
         TriggerType.enemyDefeated => 'Enemy is defeated',
-        TriggerType.playerAttacks => 'Player attacks',
       };
 
   String get shortLabel => switch (this) {
@@ -92,7 +90,6 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.playerTouchesHazard      => 'Touches Hazard',
         TriggerType.playerActivatesCheckpoint => 'Activates Checkpoint',
         TriggerType.enemyDefeated            => 'Enemy Defeated',
-        TriggerType.playerAttacks            => 'Player Attacks',
       };
 
 
@@ -118,8 +115,7 @@ extension TriggerTypeExtension on TriggerType {
         TriggerType.playerExitsWater ||
         TriggerType.playerFishes ||
         TriggerType.playerTouchesHazard ||
-        TriggerType.playerActivatesCheckpoint ||
-        TriggerType.playerAttacks =>
+        TriggerType.playerActivatesCheckpoint =>
           TriggerCategory.player,
         TriggerType.enemyNearPlayer ||
         TriggerType.enemyDefeated =>
@@ -211,7 +207,6 @@ enum ActionType {
   //World
   playAnimation,
   stopAnimation,
-  dealDamage,
 
 }
 
@@ -249,7 +244,6 @@ extension ActionTypeExtension on ActionType {
         ActionType.shakeCamera => 'Shake camera',
         ActionType.playAnimation => 'Play animation',
         ActionType.stopAnimation => 'Stop animation',
-        ActionType.dealDamage => 'Deal damage to enemies',
       };
 
   ActionCategory get category => switch (this) {
@@ -290,7 +284,6 @@ extension ActionTypeExtension on ActionType {
         ActionType.shakeCamera => ActionCategory.effects,
         ActionType.playAnimation || 
         ActionType.stopAnimation => ActionCategory.world,
-        ActionType.dealDamage => ActionCategory.player,
       };
 
   /// Parameter keys this action expects.
@@ -461,14 +454,9 @@ extension ActionTypeExtension on ActionType {
             'named': 'Object by Name',
             'tag': 'Objects by Tag',
           }),
-          ActionParam('animName', ActionParamType.text, label: 'Animation name', hint: 'walk_right'),
-          ActionParam('layer', ActionParamType.choice, label: 'Layer',
-          choices: {
-            'base': 'Base (walk/idle)',
-            'attack': 'Attack (fires once)',
-          }),
-          ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'MyNpc'),
-          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'guard'),
+          ActionParam('animName', ActionParamType.text, label: 'Animation name',hint: 'walk_right'),
+          ActionParam('objectName', ActionParamType.text, label: 'Object name',hint: 'MyNpc'),
+          ActionParam('tag', ActionParamType.text, label: 'Tag',hint: 'guard'),
         ],
         ActionType.stopAnimation => [
           ActionParam('target', ActionParamType.choice, label: 'Target',
@@ -482,16 +470,6 @@ extension ActionTypeExtension on ActionType {
           ActionParam('animName', ActionParamType.text, label: 'Animation name',hint: 'walk_right'),
           ActionParam('objectName', ActionParamType.text, label: 'Object name',hint: 'MyNpc'),
           ActionParam('tag', ActionParamType.text, label: 'Tag',hint: 'guard'),
-        ],
-        ActionType.dealDamage => [
-          ActionParam('damage', ActionParamType.number, label: 'Damage', hint: '1'),
-          ActionParam('range', ActionParamType.number, label: 'Range (tiles)', hint: '1'),
-          ActionParam('target', ActionParamType.choice, label: 'Target',
-          choices: {
-            'enemies': 'All Enemies in range',
-            'tag': 'Tagged objects in range',
-          }),
-          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'guard'),
         ],
       };
 
@@ -631,13 +609,6 @@ extension ActionTypeExtension on ActionType {
             final who = t == 'named' ? '"${p['objectName'] ?? ''}"'
                 : t == 'tag' ? '#${p['tag'] ?? ''}' : t;
             return 'Stop anim ($who)';
-          }(),
-        ActionType.dealDamage => () {
-            final dmg = p['damage'] ?? 1;
-            final range = p['range'] ?? 1;
-            final t = p['target'] as String? ?? 'enemies';
-            final who = t == 'tag' ? '#${p['tag'] ?? ''}' : 'enemies';
-            return 'Deal $dmg dmg to $who (range: $range)';
           }(),
       };
 }

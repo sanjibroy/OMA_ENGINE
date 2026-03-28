@@ -704,7 +704,7 @@ class _RulesManagerV2State extends State<RulesManagerV2> {
                   color: AppColors.textSecondary, fontSize: 11)),
           const SizedBox(width: 6),
           SizedBox(
-            width: 140,
+            width: 180,
             child: DropdownButtonFormField<String>(
               value: safeVal,
               dropdownColor: AppColors.surfaceBg,

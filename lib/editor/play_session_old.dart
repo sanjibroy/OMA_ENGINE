@@ -165,11 +165,10 @@ class _Enemy {
 
 class PlaySession {
   final Map<String, String> _forcedAnims = {};
-  String _playerForcedAnim = '';   // base layer (walk/idle — set by regular playAnimation)
-  String _playerAttackAnim = '';   // attack layer — takes priority, clears after one cycle
+  String _playerForcedAnim = '';
+  // Objects/player whose forced anim should clear once the current cycle finishes
   final Set<String> _pendingStopAnims = {};
   bool _playerPendingStop = false;
-  bool _isAttacking = false;
 
   final MapData mapData;
   final SpriteCache spriteCache;
@@ -279,24 +278,29 @@ class PlaySession {
 
   void _setForcedAnim(String objectId, String animName) {
     _forcedAnims[objectId] = animName;
-    _pendingStopAnims.remove(objectId);
+    _pendingStopAnims.remove(objectId); // cancel any pending stop
   }
 
   void _clearForcedAnim(String objectId) {
+    // Don't clear immediately — wait for the current cycle to finish
     if (_forcedAnims.containsKey(objectId)) {
       _pendingStopAnims.add(objectId);
     }
   }
 
+  /// Called each frame for objects/player with a pending stop.
+  /// Returns the forced anim to use this frame, and clears it if the cycle just ended.
   String? _tickForcedAnim(String objectId, GameObjectType type, int variantIndex) {
     final anim = _forcedAnims[objectId];
     if (anim == null) return null;
     if (!_pendingStopAnims.contains(objectId)) return anim;
+    // Pending stop: check if we're on the last frame
     final fps = spriteCache.getAnimFps(type, variantIndex, anim);
     final frameCount = spriteCache.animFrameCount(type, variantIndex, anim);
     if (frameCount > 0) {
       final frameIndex = (_elapsedSec * fps).floor() % frameCount;
       if (frameIndex == frameCount - 1) {
+        // Last frame — clear after this render
         _forcedAnims.remove(objectId);
         _pendingStopAnims.remove(objectId);
       }
@@ -305,20 +309,6 @@ class PlaySession {
   }
 
   String? _tickPlayerForcedAnim(GameObjectType type, int variantIndex) {
-    // Attack layer — plays once then clears, base layer resumes underneath
-    if (_playerAttackAnim.isNotEmpty) {
-      final fps = spriteCache.getAnimFps(type, variantIndex, _playerAttackAnim);
-      final frameCount = spriteCache.animFrameCount(type, variantIndex, _playerAttackAnim);
-      if (frameCount > 0) {
-        final frameIndex = (_elapsedSec * fps).floor() % frameCount;
-        if (frameIndex == frameCount - 1) {
-          _playerAttackAnim = '';
-          _isAttacking = false;
-        }
-      }
-      if (_playerAttackAnim.isNotEmpty) return _playerAttackAnim;
-    }
-    // Base layer (walk/idle)
     if (_playerForcedAnim.isEmpty) return null;
     if (!_playerPendingStop) return _playerForcedAnim;
     final fps = spriteCache.getAnimFps(type, variantIndex, _playerForcedAnim);
@@ -1214,22 +1204,21 @@ class PlaySession {
   void _fire(TriggerType trigger, {GameObject? triggerObj, String? cooldownKey}) {
     final key = cooldownKey ?? trigger.name;
     if (_cooldowns.containsKey(key)) return;
-    final ts = mapData.tileSize.toDouble();
+
     bool anyFired = false;
     for (final rule in rules.where((r) => r.enabled && r.trigger == trigger)) {
       if (!_evalConditions(rule)) continue;
-      _executeActions(rule.actions, triggerObj: triggerObj, ts: ts);
+      _executeActions(rule.actions, triggerObj: triggerObj);
       anyFired = true;
     }
     if (anyFired) _cooldowns[key] = _hitCooldown;
-  }
+  } 
 
 
   void _fireInstant(TriggerType trigger, {GameObject? triggerObj}) {
-    final ts = mapData.tileSize.toDouble();
     for (final rule in rules.where((r) => r.enabled && r.trigger == trigger)) {
       if (!_evalConditions(rule)) continue;
-      _executeActions(rule.actions, triggerObj: triggerObj, ts: ts);
+      _executeActions(rule.actions, triggerObj: triggerObj);
     }
   }
 
@@ -1318,7 +1307,6 @@ class PlaySession {
           o.tileX == (_playerPos.x / ts).floor() &&
           o.tileY == (_playerPos.y / ts).floor()),
       TriggerType.enemyDefeated => false, // event-based, not polled
-      TriggerType.playerAttacks => _isAttacking,
     };
   }
 
@@ -1777,18 +1765,8 @@ class PlaySession {
           final animName = a.params['animName'] as String? ?? '';
           if (animName.isEmpty) break;
           if (target == 'player') {
-            final layer = a.params['layer'] as String? ?? 'base';
-            if (layer == 'attack') {
-              // Don't interrupt an attack already in progress
-              if (_playerAttackAnim.isNotEmpty) break;
-              _playerAttackAnim = animName;
-              _isAttacking = true;
-              print('[playerAttacks] triggered, _isAttacking=true anim=$animName');
-              _fireInstant(TriggerType.playerAttacks);
-            } else {
-              _playerForcedAnim = animName;
-              _playerPendingStop = false;
-            }
+            _playerForcedAnim = animName;
+            _playerPendingStop = false;
           } else if (target == 'trigger' && triggerObj != null) {
             _setForcedAnim(triggerObj.id, animName);
           } else if (target == 'named') {
@@ -1802,44 +1780,22 @@ class PlaySession {
             for (final e in _enemies) _setForcedAnim(e.source.id, animName);
           }
 
-        case ActionType.stopAnimation:
-          final target = a.params['target'] as String? ?? 'player';
-          if (target == 'player') {
-            // Never interrupt the attack layer mid-cycle — only stop the base layer
-            if (_playerAttackAnim.isEmpty) {
-              _playerPendingStop = true;
-            }
-          } else if (target == 'trigger' && triggerObj != null) {
-            _clearForcedAnim(triggerObj.id);
-          } else if (target == 'named') {
-            final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
-            if (obj != null) _clearForcedAnim(obj.id);
-          } else if (target == 'tag') {
-            for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
-              _clearForcedAnim(obj.id);
-            }
-          } else if (target == 'enemies') {
-            for (final e in _enemies) _clearForcedAnim(e.source.id);
+      case ActionType.stopAnimation:
+        final target = a.params['target'] as String? ?? 'player';
+        if (target == 'player') {
+          _playerPendingStop = true;
+        } else if (target == 'trigger' && triggerObj != null) {
+          _clearForcedAnim(triggerObj.id);
+        } else if (target == 'named') {
+          final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
+          if (obj != null) _clearForcedAnim(obj.id);
+        } else if (target == 'tag') {
+          for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
+            _clearForcedAnim(obj.id);
           }
-
-        case ActionType.dealDamage:
-          final dmg = ((a.params['damage'] as int?) ?? 1).toDouble();
-          final rangeTiles = ((a.params['range'] as int?) ?? 1).toDouble();
-          final rangePx = rangeTiles * ts;
-          final target = a.params['target'] as String? ?? 'enemies';
-          final tag = a.params['tag'] as String? ?? '';
-          print('[dealDamage] dmg=$dmg range=$rangeTiles tiles (${rangePx}px) target=$target ts=$ts enemies=${_enemies.length}');
-          final toKill = <_Enemy>[];
-          for (final e in _enemies) {
-            if (e.hidden) continue;
-            final dist = (e.pos - _playerPos).length;
-            print('[dealDamage] enemy=${e.source.name} dist=${dist.toStringAsFixed(1)}px health=${e.health} inRange=${dist <= rangePx}');
-            if (target == 'tag' && e.source.tag != tag) continue;
-            if (dist > rangePx) continue;
-            if (e.takeDamage(dmg)) toKill.add(e);
-            print('[dealDamage] HIT enemy=${e.source.name} health after=${e.health}');
-          }
-          for (final e in toKill) _killEnemy(e);
+        } else if (target == 'enemies') {
+          for (final e in _enemies) _clearForcedAnim(e.source.id);
+        }
         default:
           break;
       }
