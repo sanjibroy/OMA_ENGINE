@@ -111,6 +111,42 @@ class _Enemy {
   Vector2? patrolEnd;
   bool _forward = true;
 
+  // Auto-attack state
+  String attackAnim = '';
+  double attackDamage = 1;
+  double attackRangePx = 0;
+  double attackInterval = 1.0;
+  double _attackTimer = 0;
+  double get attackTimer => _attackTimer;
+
+  void setAttack({
+    required double damage,
+    required double rangePx,
+    required double attacksPerSecond,
+    required String animName,
+  }) {
+    attackDamage = damage;
+    attackRangePx = rangePx;
+    attackInterval = attacksPerSecond > 0 ? 1.0 / attacksPerSecond : 1.0;
+    attackAnim = animName;
+  }
+
+  /// Returns true if the enemy should deal damage this frame.
+  bool tickAttack(double dt, Vector2 playerPos) {
+    if (attackRangePx <= 0) return false;
+    final dist = (playerPos - pos).length;
+    if (dist > attackRangePx) {
+      _attackTimer = 0;
+      return false;
+    }
+    _attackTimer += dt;
+    if (_attackTimer >= attackInterval) {
+      _attackTimer -= attackInterval;
+      return true;
+    }
+    return false;
+  }
+
   _Enemy({required this.source, required this.pos});
 
   void setPatrol(double speedTiles, double distTiles, double ts, double maxX) {
@@ -165,8 +201,8 @@ class _Enemy {
 
 class PlaySession {
   final Map<String, String> _forcedAnims = {};
-  String _playerForcedAnim = '';   // base layer (walk/idle — set by regular playAnimation)
-  String _playerAttackAnim = '';   // attack layer — takes priority, clears after one cycle
+  String _playerForcedAnim = '';   // base layer (walk/idle)
+  String _playerAttackAnim = '';   // attack layer — plays once, then clears
   final Set<String> _pendingStopAnims = {};
   bool _playerPendingStop = false;
   bool _isAttacking = false;
@@ -228,6 +264,7 @@ class PlaySession {
   // Stores the GameEffect config to fire when a projectile lands
   final Map<String, GameEffect> _landEffects = {};
   final Map<String, _DashFx> _dashFx = {};
+  final Set<String> _enemiesInProximity = {}; // tracks which enemies are currently near player
   final ParticleSystem _particles = ParticleSystem();
   final _shakeRand = Random();
   double _shakeRemaining = 0;
@@ -442,7 +479,7 @@ class PlaySession {
         }
       }
       // Fire all other actions (audio, messages, health adjustments, etc.)
-      _executeActions(rule.actions);
+      _executeActions(rule.actions, ts: ts);
     }
   }
 
@@ -959,6 +996,23 @@ class PlaySession {
     final ts = mapData.tileSize.toDouble();
     for (final e in _enemies) {
       e.update(dt, _playerPos, mapData.width * ts, mapData.height * ts);
+      if (e.attackRangePx > 0) {
+        final dist = (e.pos - _playerPos).length;
+        // print every 60 frames approx to avoid spam
+        if ((_elapsedSec * 10).floor() % 10 == 0) {
+          print('[tickAttack] enemy=${e.source.name} dist=${dist.toStringAsFixed(1)} rangePx=${e.attackRangePx} timer=${e.attackTimer.toStringAsFixed(2)} interval=${e.attackInterval}');
+        }
+      }
+      if (e.tickAttack(dt, _playerPos)) {
+        print('[tickAttack] HIT player! dmg=${e.attackDamage} health=$_health');
+        _health = (_health - e.attackDamage.round()).clamp(0, 100);
+        onHudUpdate(_health, _score, _coinCount, _gemCount, _itemCount);
+        if (_health <= 0) _fire(TriggerType.playerHealthZero);
+        if (e.attackAnim.isNotEmpty) {
+          _forcedAnims[e.source.id] = e.attackAnim;
+          _pendingStopAnims.add(e.source.id);
+        }
+      }
     }
   }
 
@@ -1040,25 +1094,86 @@ class PlaySession {
 
   void _checkProximityRules() {
     final ts = mapData.tileSize.toDouble();
+
+    // Determine the largest proximity range across all enemyNearPlayer rules
+    double maxRangePx = ts * 5; // default
+    for (final rule in rules.where((r) => r.enabled && r.trigger == TriggerType.enemyNearPlayer)) {
+      for (final action in rule.actions) {
+        if (action.type == ActionType.enemyChasePlayer) {
+          final range = ((action.params['range'] as int?) ?? 5).toDouble();
+          if (range * ts > maxRangePx) maxRangePx = range * ts;
+        }
+      }
+    }
+
+    // Detect which enemies are currently in proximity
+    final nowInRange = <String>{};
+    for (final e in _enemies) {
+      if (e.hidden) continue;
+      if ((e.pos - _playerPos).length < maxRangePx) {
+        nowInRange.add(e.source.id);
+      }
+    }
+
+    final justEntered = nowInRange.difference(_enemiesInProximity);
+    final stillInRange = nowInRange.intersection(_enemiesInProximity);
+    final justLeft = _enemiesInProximity.difference(nowInRange);
+
+    // Clear attack config for enemies that left range
+    for (final id in justLeft) {
+      final e = _enemies.firstWhere((e) => e.source.id == id, orElse: () => _enemies.first);
+      e.attackRangePx = 0;
+    }
+
+    _enemiesInProximity
+      ..removeAll(justLeft)
+      ..addAll(justEntered);
+
+    if (nowInRange.isEmpty) return;
+
     for (final rule in rules.where((r) => r.enabled && r.trigger == TriggerType.enemyNearPlayer)) {
       if (!_evalConditions(rule)) continue;
+
       for (final action in rule.actions) {
         switch (action.type) {
+          // ── Movement — continuous, per-enemy distance check ──
           case ActionType.enemyChasePlayer:
             final speed = ((action.params['speed'] as int?) ?? 2).toDouble();
             final range = ((action.params['range'] as int?) ?? 5).toDouble();
             final rangePx = range * ts;
             for (final e in _enemies) {
-              if ((e.pos - _playerPos).length < rangePx) {
-                e.setChase(speed, range, ts);
-              }
+              if ((e.pos - _playerPos).length < rangePx) e.setChase(speed, range, ts);
             }
           case ActionType.enemyStopMoving:
             for (final e in _enemies) {
               if ((e.pos - _playerPos).length < ts * 2) e.setIdle();
             }
+
+          // ── Attack config — apply to enemies now in range ──
+          case ActionType.enemyAttackPlayer:
+            final dmg = ((action.params['damage'] as int?) ?? 1).toDouble();
+            final range = ((action.params['range'] as int?) ?? 1).toDouble();
+            final aps = ((action.params['attacksPerSecond'] as int?) ?? 1).toDouble();
+            final anim = action.params['animName'] as String? ?? '';
+            final target = action.params['target'] as String? ?? 'enemies';
+            final tag = action.params['tag'] as String? ?? '';
+            for (final e in _enemies) {
+              if (e.hidden) continue;
+              if (target == 'tag' && e.source.tag != tag) continue;
+              if (nowInRange.contains(e.source.id)) {
+                e.setAttack(damage: dmg, rangePx: range * ts, attacksPerSecond: aps, animName: anim);
+              }
+            }
+
+          // ── One-shot actions — only fire when enemy ENTERS range ──
           default:
-            break;
+            if (justEntered.isNotEmpty) {
+              final cooldownKey = 'proxEnter_${rule.id}_${action.type.name}';
+              if (!_cooldowns.containsKey(cooldownKey)) {
+                _executeActions([action], ts: ts);
+                _cooldowns[cooldownKey] = _hitCooldown;
+              }
+            }
         }
       }
     }
@@ -1224,7 +1339,6 @@ class PlaySession {
     if (anyFired) _cooldowns[key] = _hitCooldown;
   }
 
-
   void _fireInstant(TriggerType trigger, {GameObject? triggerObj}) {
     final ts = mapData.tileSize.toDouble();
     for (final rule in rules.where((r) => r.enabled && r.trigger == trigger)) {
@@ -1317,7 +1431,7 @@ class PlaySession {
           !_hiddenObjectIds.contains(o.id) &&
           o.tileX == (_playerPos.x / ts).floor() &&
           o.tileY == (_playerPos.y / ts).floor()),
-      TriggerType.enemyDefeated => false, // event-based, not polled
+      TriggerType.enemyDefeated => false,
       TriggerType.playerAttacks => _isAttacking,
     };
   }
@@ -1779,11 +1893,9 @@ class PlaySession {
           if (target == 'player') {
             final layer = a.params['layer'] as String? ?? 'base';
             if (layer == 'attack') {
-              // Don't interrupt an attack already in progress
               if (_playerAttackAnim.isNotEmpty) break;
               _playerAttackAnim = animName;
               _isAttacking = true;
-              print('[playerAttacks] triggered, _isAttacking=true anim=$animName');
               _fireInstant(TriggerType.playerAttacks);
             } else {
               _playerForcedAnim = animName;
@@ -1803,43 +1915,63 @@ class PlaySession {
           }
 
         case ActionType.stopAnimation:
-          final target = a.params['target'] as String? ?? 'player';
-          if (target == 'player') {
-            // Never interrupt the attack layer mid-cycle — only stop the base layer
-            if (_playerAttackAnim.isEmpty) {
-              _playerPendingStop = true;
-            }
-          } else if (target == 'trigger' && triggerObj != null) {
+          final stopTarget = a.params['target'] as String? ?? 'player';
+          if (stopTarget == 'player') {
+            if (_playerAttackAnim.isEmpty) _playerPendingStop = true;
+          } else if (stopTarget == 'trigger' && triggerObj != null) {
             _clearForcedAnim(triggerObj.id);
-          } else if (target == 'named') {
+          } else if (stopTarget == 'named') {
             final obj = _findNamedObject(a.params['objectName'] as String? ?? '');
             if (obj != null) _clearForcedAnim(obj.id);
-          } else if (target == 'tag') {
+          } else if (stopTarget == 'tag') {
             for (final obj in _findTaggedObjects(a.params['tag'] as String? ?? '')) {
               _clearForcedAnim(obj.id);
             }
-          } else if (target == 'enemies') {
+          } else if (stopTarget == 'enemies') {
             for (final e in _enemies) _clearForcedAnim(e.source.id);
           }
 
         case ActionType.dealDamage:
+          
           final dmg = ((a.params['damage'] as int?) ?? 1).toDouble();
           final rangeTiles = ((a.params['range'] as int?) ?? 1).toDouble();
           final rangePx = rangeTiles * ts;
-          final target = a.params['target'] as String? ?? 'enemies';
-          final tag = a.params['tag'] as String? ?? '';
-          print('[dealDamage] dmg=$dmg range=$rangeTiles tiles (${rangePx}px) target=$target ts=$ts enemies=${_enemies.length}');
+          final dmgTarget = a.params['target'] as String? ?? 'enemies';
+          final dmgTag = a.params['tag'] as String? ?? '';
+          print('[dealDamage] facingDir=$_facingDir playerPos=$_playerPos');
           final toKill = <_Enemy>[];
           for (final e in _enemies) {
             if (e.hidden) continue;
-            final dist = (e.pos - _playerPos).length;
-            print('[dealDamage] enemy=${e.source.name} dist=${dist.toStringAsFixed(1)}px health=${e.health} inRange=${dist <= rangePx}');
-            if (target == 'tag' && e.source.tag != tag) continue;
-            if (dist > rangePx) continue;
+            if (dmgTarget == 'tag' && e.source.tag != dmgTag) continue;
+            final diff = e.pos - _playerPos;
+            final dot = diff.length > 0.01 ? diff.normalized().dot(_facingDir) : 1.0;
+            print('[dealDamage] enemy=${e.source.name} dist=${diff.length.toStringAsFixed(1)} dot=${dot.toStringAsFixed(2)} inRange=${diff.length <= rangePx} inArc=${dot > 0}');
+            if (diff.length > rangePx) continue;
+            if (diff.length > 0.01 && dot <= 0) continue;
             if (e.takeDamage(dmg)) toKill.add(e);
-            print('[dealDamage] HIT enemy=${e.source.name} health after=${e.health}');
           }
           for (final e in toKill) _killEnemy(e);
+
+        case ActionType.enemyAttackPlayer:
+          final eDmg = ((a.params['damage'] as int?) ?? 1).toDouble();
+          final eRange = ((a.params['range'] as int?) ?? 1).toDouble();
+          final aps = ((a.params['attacksPerSecond'] as int?) ?? 1).toDouble();
+          final eAnim = a.params['animName'] as String? ?? '';
+          final eTarget = a.params['target'] as String? ?? 'enemies';
+          final eTag = a.params['tag'] as String? ?? '';
+          print('[enemyAttackPlayer] configuring: dmg=$eDmg range=$eRange aps=$aps ts=$ts rangePx=${eRange * ts} enemies=${_enemies.length}');
+          for (final e in _enemies) {
+            if (e.hidden) continue;
+            if (eTarget == 'tag' && e.source.tag != eTag) continue;
+            e.setAttack(
+              damage: eDmg,
+              rangePx: eRange * ts,
+              attacksPerSecond: aps,
+              animName: eAnim,
+            );
+            print('[enemyAttackPlayer] set on enemy=${e.source.name} attackRangePx=${e.attackRangePx} interval=${e.attackInterval}');
+          }
+
         default:
           break;
       }

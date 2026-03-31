@@ -212,6 +212,7 @@ enum ActionType {
   playAnimation,
   stopAnimation,
   dealDamage,
+  enemyAttackPlayer,
 
 }
 
@@ -250,6 +251,7 @@ extension ActionTypeExtension on ActionType {
         ActionType.playAnimation => 'Play animation',
         ActionType.stopAnimation => 'Stop animation',
         ActionType.dealDamage => 'Deal damage to enemies',
+        ActionType.enemyAttackPlayer => 'Enemy attacks player',
       };
 
   ActionCategory get category => switch (this) {
@@ -291,6 +293,7 @@ extension ActionTypeExtension on ActionType {
         ActionType.playAnimation || 
         ActionType.stopAnimation => ActionCategory.world,
         ActionType.dealDamage => ActionCategory.player,
+        ActionType.enemyAttackPlayer => ActionCategory.enemy,
       };
 
   /// Parameter keys this action expects.
@@ -464,8 +467,8 @@ extension ActionTypeExtension on ActionType {
           ActionParam('animName', ActionParamType.text, label: 'Animation name', hint: 'walk_right'),
           ActionParam('layer', ActionParamType.choice, label: 'Layer',
           choices: {
-            'base': 'Base (walk/idle)',
-            'attack': 'Attack (fires once)',
+            'base': 'Base',
+            'attack': 'Attack',
           }),
           ActionParam('objectName', ActionParamType.text, label: 'Object name', hint: 'MyNpc'),
           ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'guard'),
@@ -490,6 +493,18 @@ extension ActionTypeExtension on ActionType {
           choices: {
             'enemies': 'All Enemies in range',
             'tag': 'Tagged objects in range',
+          }),
+          ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'guard'),
+        ],
+        ActionType.enemyAttackPlayer => [
+          ActionParam('damage', ActionParamType.number, label: 'Damage', hint: '1'),
+          ActionParam('range', ActionParamType.number, label: 'Range (tiles)', hint: '1'),
+          ActionParam('attacksPerSecond', ActionParamType.number, label: 'Attacks/sec', hint: '1'),
+          ActionParam('animName', ActionParamType.text, label: 'Attack anim', hint: 'slash'),
+          ActionParam('target', ActionParamType.choice, label: 'Target',
+          choices: {
+            'enemies': 'All Enemies',
+            'tag': 'Tagged Enemies',
           }),
           ActionParam('tag', ActionParamType.text, label: 'Tag', hint: 'guard'),
         ],
@@ -638,6 +653,12 @@ extension ActionTypeExtension on ActionType {
             final t = p['target'] as String? ?? 'enemies';
             final who = t == 'tag' ? '#${p['tag'] ?? ''}' : 'enemies';
             return 'Deal $dmg dmg to $who (range: $range)';
+          }(),
+        ActionType.enemyAttackPlayer => () {
+            final dmg = p['damage'] ?? 1;
+            final aps = p['attacksPerSecond'] ?? 1;
+            final anim = p['animName'] ?? '';
+            return 'Enemy attacks: $dmg dmg, ${aps}/sec${anim.isNotEmpty ? ', anim: $anim' : ''}';
           }(),
       };
 }

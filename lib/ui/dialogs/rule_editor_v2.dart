@@ -88,6 +88,28 @@ class _RulesManagerV2State extends State<RulesManagerV2> {
     widget.onChanged();
   }
 
+  void _duplicateRule(int index) {
+    _saveEditing();
+    final source = _rules[index];
+    final copy = GameRule(
+      name: '${source.name} (copy)',
+      conditions: source.conditions
+          .map((c) => RuleCondition(trigger: c.trigger, negate: c.negate))
+          .toList(),
+      operators: List.from(source.operators),
+      actions: source.actions
+          .map((a) => RuleAction(type: a.type, params: Map.from(a.params)))
+          .toList(),
+      enabled: source.enabled,
+      triggerParams: Map.from(source.triggerParams),
+    );
+    setState(() {
+      _rules.insert(index + 1, copy);
+      _selectRule(index + 1);
+    });
+    widget.onChanged();
+  }
+
   void _deleteRule(int index) {
     setState(() {
       _rules.removeAt(index);
@@ -299,6 +321,15 @@ class _RulesManagerV2State extends State<RulesManagerV2> {
                         color: AppColors.textMuted, fontSize: 10),
                   ),
                 ],
+              ),
+            ),
+            // Duplicate button
+            GestureDetector(
+              onTap: () => _duplicateRule(index),
+              child: const Padding(
+                padding: EdgeInsets.only(right: 6),
+                child: Icon(Icons.copy_outlined,
+                    size: 12, color: AppColors.textMuted),
               ),
             ),
             // Delete button
@@ -1054,6 +1085,7 @@ class _TriggerDropdownState extends State<_TriggerDropdown> {
     TriggerType.playerActivatesCheckpoint: Icons.flag,
     TriggerType.enemyNearPlayer: Icons.track_changes,
     TriggerType.enemyDefeated: Icons.emoji_events,
+    TriggerType.playerAttacks: Icons.sports_martial_arts,
     TriggerType.gameStart: Icons.play_circle_outline,
     TriggerType.onTimer: Icons.timer,
   };
@@ -1447,6 +1479,8 @@ class _ActionDropdownState extends State<_ActionDropdown> {
     ActionType.shakeCamera: Icons.vibration,
     ActionType.playAnimation: Icons.play_circle_outline,
     ActionType.stopAnimation: Icons.stop_circle_outlined,
+    ActionType.dealDamage: Icons.gavel,
+    ActionType.enemyAttackPlayer: Icons.auto_fix_normal,
   };
 
   @override

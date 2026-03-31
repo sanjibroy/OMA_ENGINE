@@ -128,6 +128,8 @@ extension _ActionUI on ActionType {
         ActionType.playAnimation => Icons.play_circle_outline,
         ActionType.stopAnimation => Icons.stop_circle_outlined,
         ActionType.dealDamage    => Icons.gavel,
+        ActionType.enemyAttackPlayer => Icons.bolt_sharp,
+        
       };
 
   String get shortLabel => switch (this) {
@@ -164,6 +166,8 @@ extension _ActionUI on ActionType {
         ActionType.playAnimation => 'Play Animation',
         ActionType.stopAnimation => 'Stop Animation',
         ActionType.dealDamage => 'Deal damage to enemies',
+        ActionType.enemyAttackPlayer => 'Enemy attacks',
+        
       };
 
   Color get catColor => _aCats[category]!.color;
